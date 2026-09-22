@@ -6,22 +6,36 @@ import sys
 import time
 from pathlib import Path
 
-from browser_harness.admin import ensure_daemon
-from browser_harness.helpers import cdp
-
 # Atomically read visible content and controls, preserving actual DOM node identity.
 READ_STATE = Path(__file__).with_name("snapshot.js").read_text()
 MARKER = f"(() => {{ const state={READ_STATE}; return state?.marker ?? null; }})()"
+
+
+def ensure_daemon():
+    # The supervised worker supplies its own transport and must never load
+    # another harness workspace's .env or create/reuse its daemon.
+    from browser_harness.admin import ensure_daemon as ensure
+
+    return ensure()
+
+
+def cdp(*args, **kwargs):
+    from browser_harness.helpers import cdp as call
+
+    return call(*args, **kwargs)
+
 
 class StalePage(ValueError):
     """A decision no longer refers to the observed page."""
 
 
 class Browser:
-    def __init__(self, url):
-        ensure_daemon()
-        self.target = cdp("Target.createTarget", url="about:blank", background=True)["targetId"]
-        self.session = cdp("Target.attachToTarget", targetId=self.target, flatten=True)["sessionId"]
+    def __init__(self, url, *, transport=None):
+        if transport is None:
+            ensure_daemon()
+        self._cdp = transport or cdp
+        self.target = self._cdp("Target.createTarget", url="about:blank", background=True)["targetId"]
+        self.session = self._cdp("Target.attachToTarget", targetId=self.target, flatten=True)["sessionId"]
         self.call("Emulation.setDeviceMetricsOverride", width=1120, height=780, deviceScaleFactor=1, mobile=False)
         # Keep rAF/menus rendering in an owned background tab, without activating the user's Chrome tab.
         self.call("Emulation.setFocusEmulationEnabled", enabled=True)
@@ -33,7 +47,7 @@ class Browser:
             time.sleep(0.02)
 
     def call(self, method, **params):
-        return cdp(method, session_id=self.session, **params)
+        return self._cdp(method, session_id=self.session, **params)
 
     def evaluate(self, expression):
         response = self.call("Runtime.evaluate", expression=expression, returnByValue=True)
@@ -77,7 +91,7 @@ class Browser:
         for attempt in range(10):
             try:
                 return browser_operation(
-                    {"operation": "observe", "session": self.session, "screenshot": screenshot}
+                    {"operation": "observe", "session": self.session, "screenshot": screenshot}, transport=self._cdp
                 )
             except StalePage:
                 if attempt == 9:
@@ -102,13 +116,15 @@ class Browser:
             raise StalePage("Page changed since this decision. Observe again.")
         if action["kind"] == "wait":
             time.sleep(0.1)
-        result = browser_operation({"operation": "act", "session": self.session, "action": action, "text": text})
+        result = browser_operation(
+            {"operation": "act", "session": self.session, "action": action, "text": text}, transport=self._cdp
+        )
         self.after_input = action if action["kind"] != "wait" else None
         return result
 
     def close(self):
         if self.target:
-            cdp("Target.closeTarget", targetId=self.target)
+            self._cdp("Target.closeTarget", targetId=self.target)
             self.target = None
 
 
@@ -117,12 +133,12 @@ def fingerprint(state):
     return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()
 
 
-def browser_operation(request):
+def browser_operation(request, *, transport=None):
     operation = request["operation"]
     session = request["session"]
 
     def call(method, **params):
-        return cdp(method, session_id=session, **params)
+        return (transport or cdp)(method, session_id=session, **params)
 
     def evaluate(expression):
         result = call("Runtime.evaluate", expression=expression, returnByValue=True)

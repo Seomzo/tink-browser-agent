@@ -1,5 +1,15 @@
 <img src="docs/banner.svg" alt="Jev Ultrafast · Browser Use × TypeSafe" width="100%" />
 
+> **Tink comparison fork:** the original hosted-Jev backend remains the default. This fork adds
+> an optional persistent Laya backend, reproducible comparison tools, and a supervised
+> [Tink desktop worker](docs/tink-worker.md). See
+> [Jev setup](docs/jev-quickstart.md) and [pricing and evaluation status](docs/tink-comparison.md). No speed or reliability
+> advantage is claimed until both backends have been measured on the same tasks.
+
+Current work starts with the hosted Jev baseline. The comparison command defaults to Jev only;
+local inference requires explicitly selecting Laya. An original Tink browser-use implementation
+is being planned separately from this upstream fork.
+
 # Jev Ultrafast ⚡
 
 > [!IMPORTANT]

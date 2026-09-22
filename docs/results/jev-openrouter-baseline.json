@@ -1,0 +1,933 @@
+{
+  "date": "2026-09-22",
+  "reports": {
+    "jev-openrouter-decisions": {
+      "suite": "decisions",
+      "scope": "Synthetic next-action diagnostics; not browser completion",
+      "configuration": {
+        "TYPESAFE_MODEL": "typesafe/jev-1.13",
+        "TYPESAFE_BASE_URL": "https://openrouter.ai/api",
+        "TEXT_MODEL": "inception/mercury-2.5",
+        "TEXT_MODEL_BASE_URL": "https://openrouter.ai/api/v1",
+        "TEXT_MODEL_REASONING": "none"
+      },
+      "source_hashes": {
+        "jev_ultrafast/__init__.py": "60f025b8d24465e2c0f7a3547d43b8020fd8843de7b6cb3f892ef63f5548cf63",
+        "jev_ultrafast/agent.py": "b6e52461483d70d7d14017f99e13ab80bfabbefd8fff75b4fa88975b718ef823",
+        "jev_ultrafast/browser.py": "ee08dafa93d731bd292aa0263a578a29c8001cf22eef3c59fe44a159649155ee",
+        "jev_ultrafast/demo.py": "a0cfb10909b370efb284cbbe16bdb4b7e7e06ba6385827404169027645a1d8a4",
+        "jev_ultrafast/laya_backend.py": "028a04ad0fd54284bb7a74e968b3deaa0daf4bcb59d279c02af13902f009f51f",
+        "jev_ultrafast/model.py": "fa3e50931be57c78144e55c5cc967bca78d35ceabc1b01fe313e09af46826c2f",
+        "jev_ultrafast/questions.py": "66a7054b85040b949e1757311257ea0c5a843c635f9a40c99f6d15ad660fb422",
+        "jev_ultrafast/snapshot.js": "e50473501c8fb8e70f3b21866d987393e3f2315c639d638bd477d170e81ed78d",
+        "scripts/compare.py": "bbd92f96ebb3f0186adad17b9912350afa602a92d9ae2cc4959fa6f3de76c9b5",
+        "benchmarks/decisions.json": "3c601e69114eb25dd2652358ab6faeb626756a22f19f821bfa48ba2a0322f166"
+      },
+      "system": {
+        "os": "Darwin",
+        "architecture": "arm64",
+        "python": "3.12.2"
+      },
+      "summary": {
+        "jev": {
+          "attempts": 12,
+          "passed": 11,
+          "pass_rate": 0.9166666666666666,
+          "errors": 0,
+          "latency_p50_ms": 176.0,
+          "latency_p95_ms": 225,
+          "estimated_jev_cost_usd": 0.0006352920000000001,
+          "reported_text_cost_usd": 0,
+          "model_usd_per_success": 5.775381818181819e-05,
+          "cost_incomplete": false
+        }
+      },
+      "raw_sha256": "70fce52784ed3f0f4cf35a85dfb4b64002a327ac337f8d968b2106b4bcf5382b",
+      "rows": [
+        {
+          "backend": "jev",
+          "case": "fill-destination",
+          "phase": "measured",
+          "repeat": 0,
+          "passed": true,
+          "error": null,
+          "jev_input_tokens": 1518,
+          "reported_text_cost_usd": 0,
+          "elapsed_ms": 225,
+          "decision_requests": 1,
+          "text_cost_missing": false,
+          "reported_jev_cost_usd": 6.3756e-05,
+          "decision_cost_missing": false,
+          "decisions": [
+            {
+              "choice": "e1",
+              "operation": "TYPE_TEXT",
+              "confidence": 0.99,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 225,
+              "usage": {
+                "input_tokens": 1518,
+                "output_tokens": 101,
+                "cost": 6.3756e-05
+              }
+            }
+          ],
+          "verification_passed": null
+        },
+        {
+          "backend": "jev",
+          "case": "submit-filled-search",
+          "phase": "measured",
+          "repeat": 0,
+          "passed": true,
+          "error": null,
+          "jev_input_tokens": 1520,
+          "reported_text_cost_usd": 0,
+          "elapsed_ms": 172,
+          "decision_requests": 1,
+          "text_cost_missing": false,
+          "reported_jev_cost_usd": 6.384e-05,
+          "decision_cost_missing": false,
+          "decisions": [
+            {
+              "choice": "e2",
+              "operation": "CLICK",
+              "confidence": 0.96,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 172,
+              "usage": {
+                "input_tokens": 1520,
+                "output_tokens": 100,
+                "cost": 6.384e-05
+              }
+            }
+          ],
+          "verification_passed": null
+        },
+        {
+          "backend": "jev",
+          "case": "autocomplete",
+          "phase": "measured",
+          "repeat": 0,
+          "passed": true,
+          "error": null,
+          "jev_input_tokens": 1163,
+          "reported_text_cost_usd": 0,
+          "elapsed_ms": 130,
+          "decision_requests": 1,
+          "text_cost_missing": false,
+          "reported_jev_cost_usd": 4.8846e-05,
+          "decision_cost_missing": false,
+          "decisions": [
+            {
+              "choice": "e2",
+              "operation": "CLICK",
+              "confidence": 1,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 130,
+              "usage": {
+                "input_tokens": 1163,
+                "output_tokens": 76,
+                "cost": 4.8846e-05
+              }
+            }
+          ],
+          "verification_passed": null
+        },
+        {
+          "backend": "jev",
+          "case": "enable-checkbox",
+          "phase": "measured",
+          "repeat": 0,
+          "passed": true,
+          "error": null,
+          "jev_input_tokens": 1153,
+          "reported_text_cost_usd": 0,
+          "elapsed_ms": 156,
+          "decision_requests": 1,
+          "text_cost_missing": false,
+          "reported_jev_cost_usd": 4.8426e-05,
+          "decision_cost_missing": false,
+          "decisions": [
+            {
+              "choice": "e1",
+              "operation": "CLICK",
+              "confidence": 0.99,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 156,
+              "usage": {
+                "input_tokens": 1153,
+                "output_tokens": 76,
+                "cost": 4.8426e-05
+              }
+            }
+          ],
+          "verification_passed": null
+        },
+        {
+          "backend": "jev",
+          "case": "already-enabled-submit",
+          "phase": "measured",
+          "repeat": 0,
+          "passed": true,
+          "error": null,
+          "jev_input_tokens": 1628,
+          "reported_text_cost_usd": 0,
+          "elapsed_ms": 135,
+          "decision_requests": 1,
+          "text_cost_missing": false,
+          "reported_jev_cost_usd": 6.8376e-05,
+          "decision_cost_missing": false,
+          "decisions": [
+            {
+              "choice": "e3",
+              "operation": "CLICK",
+              "confidence": 0.95,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 135,
+              "usage": {
+                "input_tokens": 1628,
+                "output_tokens": 107,
+                "cost": 6.8376e-05
+              }
+            }
+          ],
+          "verification_passed": null
+        },
+        {
+          "backend": "jev",
+          "case": "native-select",
+          "phase": "measured",
+          "repeat": 0,
+          "passed": true,
+          "error": null,
+          "jev_input_tokens": 1176,
+          "reported_text_cost_usd": 0,
+          "elapsed_ms": 192,
+          "decision_requests": 1,
+          "text_cost_missing": false,
+          "reported_jev_cost_usd": 4.9392e-05,
+          "decision_cost_missing": false,
+          "decisions": [
+            {
+              "choice": "e1",
+              "operation": "SELECT",
+              "confidence": 1,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 192,
+              "usage": {
+                "input_tokens": 1176,
+                "output_tokens": 82,
+                "cost": 4.9392e-05
+              }
+            }
+          ],
+          "verification_passed": null
+        },
+        {
+          "backend": "jev",
+          "case": "open-result",
+          "phase": "measured",
+          "repeat": 0,
+          "passed": true,
+          "error": null,
+          "jev_input_tokens": 1238,
+          "reported_text_cost_usd": 0,
+          "elapsed_ms": 204,
+          "decision_requests": 1,
+          "text_cost_missing": false,
+          "reported_jev_cost_usd": 5.1996e-05,
+          "decision_cost_missing": false,
+          "decisions": [
+            {
+              "choice": "e2",
+              "operation": "CLICK",
+              "confidence": 1,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 204,
+              "usage": {
+                "input_tokens": 1238,
+                "output_tokens": 83,
+                "cost": 5.1996e-05
+              }
+            }
+          ],
+          "verification_passed": null
+        },
+        {
+          "backend": "jev",
+          "case": "already-complete",
+          "phase": "measured",
+          "repeat": 0,
+          "passed": false,
+          "error": null,
+          "jev_input_tokens": 1084,
+          "reported_text_cost_usd": 0,
+          "elapsed_ms": 135,
+          "decision_requests": 1,
+          "text_cost_missing": false,
+          "reported_jev_cost_usd": 4.5528e-05,
+          "decision_cost_missing": false,
+          "decisions": [
+            {
+              "choice": "BLOCKED",
+              "operation": "BLOCKED",
+              "confidence": 0.22,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 135,
+              "usage": {
+                "input_tokens": 1084,
+                "output_tokens": 71,
+                "cost": 4.5528e-05
+              }
+            }
+          ],
+          "verification_passed": null
+        },
+        {
+          "backend": "jev",
+          "case": "loading",
+          "phase": "measured",
+          "repeat": 0,
+          "passed": true,
+          "error": null,
+          "jev_input_tokens": 621,
+          "reported_text_cost_usd": 0,
+          "elapsed_ms": 197,
+          "decision_requests": 1,
+          "text_cost_missing": false,
+          "reported_jev_cost_usd": 2.6082e-05,
+          "decision_cost_missing": false,
+          "decisions": [
+            {
+              "choice": "wait",
+              "operation": "WAIT",
+              "confidence": 0.96,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 196,
+              "usage": {
+                "input_tokens": 621,
+                "output_tokens": 40,
+                "cost": 2.6082e-05
+              }
+            }
+          ],
+          "verification_passed": null
+        },
+        {
+          "backend": "jev",
+          "case": "unsupported",
+          "phase": "measured",
+          "repeat": 0,
+          "passed": true,
+          "error": null,
+          "jev_input_tokens": 635,
+          "reported_text_cost_usd": 0,
+          "elapsed_ms": 180,
+          "decision_requests": 1,
+          "text_cost_missing": false,
+          "reported_jev_cost_usd": 2.667e-05,
+          "decision_cost_missing": false,
+          "decisions": [
+            {
+              "choice": "BLOCKED",
+              "operation": "BLOCKED",
+              "confidence": 0.99,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 180,
+              "usage": {
+                "input_tokens": 635,
+                "output_tokens": 42,
+                "cost": 2.667e-05
+              }
+            }
+          ],
+          "verification_passed": null
+        },
+        {
+          "backend": "jev",
+          "case": "many-targets",
+          "phase": "measured",
+          "repeat": 0,
+          "passed": true,
+          "error": null,
+          "jev_input_tokens": 2758,
+          "reported_text_cost_usd": 0,
+          "elapsed_ms": 205,
+          "decision_requests": 1,
+          "text_cost_missing": false,
+          "reported_jev_cost_usd": 0.000115836,
+          "decision_cost_missing": false,
+          "decisions": [
+            {
+              "choice": "e17",
+              "operation": "CLICK",
+              "confidence": 1,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 205,
+              "usage": {
+                "input_tokens": 2758,
+                "output_tokens": 214,
+                "cost": 0.000115836
+              }
+            }
+          ],
+          "verification_passed": null
+        },
+        {
+          "backend": "jev",
+          "case": "scroll",
+          "phase": "measured",
+          "repeat": 0,
+          "passed": true,
+          "error": null,
+          "jev_input_tokens": 632,
+          "reported_text_cost_usd": 0,
+          "elapsed_ms": 139,
+          "decision_requests": 1,
+          "text_cost_missing": false,
+          "reported_jev_cost_usd": 2.6544e-05,
+          "decision_cost_missing": false,
+          "decisions": [
+            {
+              "choice": "scroll_down",
+              "operation": "SCROLL_DOWN",
+              "confidence": 0.84,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 139,
+              "usage": {
+                "input_tokens": 632,
+                "output_tokens": 51,
+                "cost": 2.6544e-05
+              }
+            }
+          ],
+          "verification_passed": null
+        }
+      ]
+    },
+    "jev-openrouter-browser": {
+      "suite": "browser",
+      "scope": "Repeated local hotel fixture; not a broad web reliability benchmark",
+      "configuration": {
+        "TYPESAFE_MODEL": "typesafe/jev-1.13",
+        "TYPESAFE_BASE_URL": "https://openrouter.ai/api",
+        "TEXT_MODEL": "inception/mercury-2.5",
+        "TEXT_MODEL_BASE_URL": "https://openrouter.ai/api/v1",
+        "TEXT_MODEL_REASONING": "none"
+      },
+      "source_hashes": {
+        "jev_ultrafast/__init__.py": "60f025b8d24465e2c0f7a3547d43b8020fd8843de7b6cb3f892ef63f5548cf63",
+        "jev_ultrafast/agent.py": "b6e52461483d70d7d14017f99e13ab80bfabbefd8fff75b4fa88975b718ef823",
+        "jev_ultrafast/browser.py": "ee08dafa93d731bd292aa0263a578a29c8001cf22eef3c59fe44a159649155ee",
+        "jev_ultrafast/demo.py": "a0cfb10909b370efb284cbbe16bdb4b7e7e06ba6385827404169027645a1d8a4",
+        "jev_ultrafast/laya_backend.py": "028a04ad0fd54284bb7a74e968b3deaa0daf4bcb59d279c02af13902f009f51f",
+        "jev_ultrafast/model.py": "fa3e50931be57c78144e55c5cc967bca78d35ceabc1b01fe313e09af46826c2f",
+        "jev_ultrafast/questions.py": "66a7054b85040b949e1757311257ea0c5a843c635f9a40c99f6d15ad660fb422",
+        "jev_ultrafast/snapshot.js": "e50473501c8fb8e70f3b21866d987393e3f2315c639d638bd477d170e81ed78d",
+        "scripts/compare.py": "bbd92f96ebb3f0186adad17b9912350afa602a92d9ae2cc4959fa6f3de76c9b5",
+        "benchmarks/decisions.json": "3c601e69114eb25dd2652358ab6faeb626756a22f19f821bfa48ba2a0322f166"
+      },
+      "system": {
+        "os": "Darwin",
+        "architecture": "arm64",
+        "python": "3.12.2"
+      },
+      "summary": {
+        "jev": {
+          "attempts": 3,
+          "passed": 1,
+          "pass_rate": 0.3333333333333333,
+          "errors": 2,
+          "latency_p50_ms": 855,
+          "latency_p95_ms": 11803,
+          "estimated_jev_cost_usd": 0.0009576000000000001,
+          "reported_text_cost_usd": 3.467e-05,
+          "model_usd_per_success": 0.0009922700000000002,
+          "cost_incomplete": true
+        }
+      },
+      "raw_sha256": "10440ec1f5652d19845dffcbfdb539c194e613b03e0f9e4df096bce8a976b4c2",
+      "rows": [
+        {
+          "backend": "jev",
+          "case": "hotel-fixture",
+          "phase": "measured",
+          "repeat": 0,
+          "passed": true,
+          "error": null,
+          "jev_input_tokens": 16672,
+          "reported_text_cost_usd": 3.467e-05,
+          "browser_setup_ms": 45,
+          "elapsed_ms": 11803,
+          "decision_requests": 6,
+          "text_cost_missing": false,
+          "reported_jev_cost_usd": 0.000700224,
+          "decision_cost_missing": false,
+          "decisions": [
+            {
+              "choice": "e4",
+              "operation": "TYPE_TEXT",
+              "confidence": 0.92,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 262,
+              "usage": {
+                "input_tokens": 3064,
+                "output_tokens": 218,
+                "cost": 0.000128688
+              }
+            },
+            {
+              "choice": "e6",
+              "operation": "CLICK",
+              "confidence": 0.41,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 201,
+              "usage": {
+                "input_tokens": 3103,
+                "output_tokens": 217,
+                "cost": 0.000130326
+              }
+            },
+            {
+              "choice": "e7",
+              "operation": "SELECT",
+              "confidence": 0.6,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 219,
+              "usage": {
+                "input_tokens": 3011,
+                "output_tokens": 209,
+                "cost": 0.000126462
+              }
+            },
+            {
+              "choice": "e10",
+              "operation": "CLICK",
+              "confidence": 0.88,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 234,
+              "usage": {
+                "input_tokens": 2926,
+                "output_tokens": 202,
+                "cost": 0.000122892
+              }
+            },
+            {
+              "choice": "e11",
+              "operation": "CLICK",
+              "confidence": 0.74,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 219,
+              "usage": {
+                "input_tokens": 2958,
+                "output_tokens": 202,
+                "cost": 0.000124236
+              }
+            },
+            {
+              "choice": "DONE",
+              "operation": "DONE",
+              "confidence": 0.94,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 182,
+              "usage": {
+                "input_tokens": 1610,
+                "output_tokens": 90,
+                "cost": 6.762e-05
+              }
+            }
+          ],
+          "verification_passed": true
+        },
+        {
+          "backend": "jev",
+          "case": "hotel-fixture",
+          "phase": "measured",
+          "repeat": 1,
+          "passed": false,
+          "error": "ValueError: Text helper returned no valid field value; nothing typed.",
+          "jev_input_tokens": 3064,
+          "reported_text_cost_usd": 0,
+          "browser_setup_ms": 51,
+          "elapsed_ms": 855,
+          "decision_requests": 1,
+          "text_cost_missing": false,
+          "reported_jev_cost_usd": 0.000128688,
+          "decision_cost_missing": false,
+          "decisions": [
+            {
+              "choice": "e4",
+              "operation": "TYPE_TEXT",
+              "confidence": 0.89,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 222,
+              "usage": {
+                "input_tokens": 3064,
+                "output_tokens": 218,
+                "cost": 0.000128688
+              }
+            }
+          ],
+          "verification_passed": false
+        },
+        {
+          "backend": "jev",
+          "case": "hotel-fixture",
+          "phase": "measured",
+          "repeat": 2,
+          "passed": false,
+          "error": "ValueError: Text helper returned no valid field value; nothing typed.",
+          "jev_input_tokens": 3064,
+          "reported_text_cost_usd": 0,
+          "browser_setup_ms": 45,
+          "elapsed_ms": 697,
+          "decision_requests": 1,
+          "text_cost_missing": false,
+          "reported_jev_cost_usd": 0.000128688,
+          "decision_cost_missing": false,
+          "decisions": [
+            {
+              "choice": "e4",
+              "operation": "TYPE_TEXT",
+              "confidence": 0.93,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 154,
+              "usage": {
+                "input_tokens": 3064,
+                "output_tokens": 218,
+                "cost": 0.000128688
+              }
+            }
+          ],
+          "verification_passed": false
+        }
+      ]
+    },
+    "jev-openrouter-browser-schema": {
+      "suite": "browser",
+      "scope": "Repeated local hotel fixture; not a broad web reliability benchmark",
+      "configuration": {
+        "TYPESAFE_MODEL": "typesafe/jev-1.13",
+        "TYPESAFE_BASE_URL": "https://openrouter.ai/api",
+        "TEXT_MODEL": "inception/mercury-2.5",
+        "TEXT_MODEL_BASE_URL": "https://openrouter.ai/api/v1",
+        "TEXT_MODEL_REASONING": "none",
+        "TEXT_MODEL_RESPONSE_FORMAT": "json_schema"
+      },
+      "source_hashes": {
+        "jev_ultrafast/__init__.py": "60f025b8d24465e2c0f7a3547d43b8020fd8843de7b6cb3f892ef63f5548cf63",
+        "jev_ultrafast/agent.py": "b6e52461483d70d7d14017f99e13ab80bfabbefd8fff75b4fa88975b718ef823",
+        "jev_ultrafast/browser.py": "ee08dafa93d731bd292aa0263a578a29c8001cf22eef3c59fe44a159649155ee",
+        "jev_ultrafast/demo.py": "a0cfb10909b370efb284cbbe16bdb4b7e7e06ba6385827404169027645a1d8a4",
+        "jev_ultrafast/laya_backend.py": "028a04ad0fd54284bb7a74e968b3deaa0daf4bcb59d279c02af13902f009f51f",
+        "jev_ultrafast/model.py": "74abde3ba285735d55df9f7355f2e700522ba65b2c6abb75c656e058d97c582f",
+        "jev_ultrafast/questions.py": "66a7054b85040b949e1757311257ea0c5a843c635f9a40c99f6d15ad660fb422",
+        "jev_ultrafast/snapshot.js": "e50473501c8fb8e70f3b21866d987393e3f2315c639d638bd477d170e81ed78d",
+        "scripts/compare.py": "3e533ea1c0fbf14157e28fbff7c70a14e90460ed83127f028018aa7437fe6f10",
+        "benchmarks/decisions.json": "3c601e69114eb25dd2652358ab6faeb626756a22f19f821bfa48ba2a0322f166"
+      },
+      "system": {
+        "os": "Darwin",
+        "architecture": "arm64",
+        "python": "3.12.2"
+      },
+      "summary": {
+        "jev": {
+          "attempts": 3,
+          "passed": 3,
+          "pass_rate": 1.0,
+          "errors": 0,
+          "latency_p50_ms": 2094,
+          "latency_p95_ms": 2200,
+          "estimated_jev_cost_usd": 0.002100672,
+          "reported_text_cost_usd": 0.00010846,
+          "model_usd_per_success": 0.0007363773333333333,
+          "cost_incomplete": false
+        }
+      },
+      "raw_sha256": "5dfc9e9346fd8e473164638ca20b938a57a2359e27819345e12d9f9bcb86434f",
+      "rows": [
+        {
+          "backend": "jev",
+          "case": "hotel-fixture",
+          "phase": "measured",
+          "repeat": 0,
+          "passed": true,
+          "error": null,
+          "jev_input_tokens": 16672,
+          "reported_text_cost_usd": 3.873e-05,
+          "browser_setup_ms": 43,
+          "elapsed_ms": 2060,
+          "decision_requests": 6,
+          "text_cost_missing": false,
+          "reported_jev_cost_usd": 0.000700224,
+          "decision_cost_missing": false,
+          "decisions": [
+            {
+              "choice": "e4",
+              "operation": "TYPE_TEXT",
+              "confidence": 0.89,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 250,
+              "usage": {
+                "input_tokens": 3064,
+                "output_tokens": 218,
+                "cost": 0.000128688
+              }
+            },
+            {
+              "choice": "e6",
+              "operation": "CLICK",
+              "confidence": 0.41,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 144,
+              "usage": {
+                "input_tokens": 3103,
+                "output_tokens": 217,
+                "cost": 0.000130326
+              }
+            },
+            {
+              "choice": "e7",
+              "operation": "SELECT",
+              "confidence": 0.61,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 161,
+              "usage": {
+                "input_tokens": 3011,
+                "output_tokens": 209,
+                "cost": 0.000126462
+              }
+            },
+            {
+              "choice": "e10",
+              "operation": "CLICK",
+              "confidence": 0.9,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 183,
+              "usage": {
+                "input_tokens": 2926,
+                "output_tokens": 202,
+                "cost": 0.000122892
+              }
+            },
+            {
+              "choice": "e11",
+              "operation": "CLICK",
+              "confidence": 0.71,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 185,
+              "usage": {
+                "input_tokens": 2958,
+                "output_tokens": 202,
+                "cost": 0.000124236
+              }
+            },
+            {
+              "choice": "DONE",
+              "operation": "DONE",
+              "confidence": 0.94,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 187,
+              "usage": {
+                "input_tokens": 1610,
+                "output_tokens": 90,
+                "cost": 6.762e-05
+              }
+            }
+          ],
+          "verification_passed": true
+        },
+        {
+          "backend": "jev",
+          "case": "hotel-fixture",
+          "phase": "measured",
+          "repeat": 1,
+          "passed": true,
+          "error": null,
+          "jev_input_tokens": 16672,
+          "reported_text_cost_usd": 3.565e-05,
+          "browser_setup_ms": 49,
+          "elapsed_ms": 2200,
+          "decision_requests": 6,
+          "text_cost_missing": false,
+          "reported_jev_cost_usd": 0.000700224,
+          "decision_cost_missing": false,
+          "decisions": [
+            {
+              "choice": "e4",
+              "operation": "TYPE_TEXT",
+              "confidence": 0.91,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 187,
+              "usage": {
+                "input_tokens": 3064,
+                "output_tokens": 218,
+                "cost": 0.000128688
+              }
+            },
+            {
+              "choice": "e6",
+              "operation": "CLICK",
+              "confidence": 0.41,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 166,
+              "usage": {
+                "input_tokens": 3103,
+                "output_tokens": 217,
+                "cost": 0.000130326
+              }
+            },
+            {
+              "choice": "e7",
+              "operation": "SELECT",
+              "confidence": 0.6,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 202,
+              "usage": {
+                "input_tokens": 3011,
+                "output_tokens": 209,
+                "cost": 0.000126462
+              }
+            },
+            {
+              "choice": "e10",
+              "operation": "CLICK",
+              "confidence": 0.89,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 261,
+              "usage": {
+                "input_tokens": 2926,
+                "output_tokens": 202,
+                "cost": 0.000122892
+              }
+            },
+            {
+              "choice": "e11",
+              "operation": "CLICK",
+              "confidence": 0.74,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 151,
+              "usage": {
+                "input_tokens": 2958,
+                "output_tokens": 202,
+                "cost": 0.000124236
+              }
+            },
+            {
+              "choice": "DONE",
+              "operation": "DONE",
+              "confidence": 0.94,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 206,
+              "usage": {
+                "input_tokens": 1610,
+                "output_tokens": 90,
+                "cost": 6.762e-05
+              }
+            }
+          ],
+          "verification_passed": true
+        },
+        {
+          "backend": "jev",
+          "case": "hotel-fixture",
+          "phase": "measured",
+          "repeat": 2,
+          "passed": true,
+          "error": null,
+          "jev_input_tokens": 16672,
+          "reported_text_cost_usd": 3.408e-05,
+          "browser_setup_ms": 46,
+          "elapsed_ms": 2094,
+          "decision_requests": 6,
+          "text_cost_missing": false,
+          "reported_jev_cost_usd": 0.000700224,
+          "decision_cost_missing": false,
+          "decisions": [
+            {
+              "choice": "e4",
+              "operation": "TYPE_TEXT",
+              "confidence": 0.91,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 186,
+              "usage": {
+                "input_tokens": 3064,
+                "output_tokens": 218,
+                "cost": 0.000128688
+              }
+            },
+            {
+              "choice": "e6",
+              "operation": "CLICK",
+              "confidence": 0.39,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 177,
+              "usage": {
+                "input_tokens": 3103,
+                "output_tokens": 217,
+                "cost": 0.000130326
+              }
+            },
+            {
+              "choice": "e7",
+              "operation": "SELECT",
+              "confidence": 0.6,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 232,
+              "usage": {
+                "input_tokens": 3011,
+                "output_tokens": 209,
+                "cost": 0.000126462
+              }
+            },
+            {
+              "choice": "e10",
+              "operation": "CLICK",
+              "confidence": 0.88,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 161,
+              "usage": {
+                "input_tokens": 2926,
+                "output_tokens": 202,
+                "cost": 0.000122892
+              }
+            },
+            {
+              "choice": "e11",
+              "operation": "CLICK",
+              "confidence": 0.78,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 177,
+              "usage": {
+                "input_tokens": 2958,
+                "output_tokens": 202,
+                "cost": 0.000124236
+              }
+            },
+            {
+              "choice": "DONE",
+              "operation": "DONE",
+              "confidence": 0.94,
+              "model": "typesafe/jev-1.13-20260917",
+              "latency_ms": 139,
+              "usage": {
+                "input_tokens": 1610,
+                "output_tokens": 90,
+                "cost": 6.762e-05
+              }
+            }
+          ],
+          "verification_passed": true
+        }
+      ]
+    }
+  },
+  "limits": [
+    "One synthetic diagnostic pass and two three-run arms on one local browser task.",
+    "Failed helper calls in the original-format arm have unrecorded costs.",
+    "Smoke calls and isolated helper probes are retained locally and excluded here.",
+    "Task clock excludes initial navigation/observation and final independent verification."
+  ]
+}
