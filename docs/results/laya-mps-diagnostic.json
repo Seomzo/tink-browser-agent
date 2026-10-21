@@ -1,0 +1,1302 @@
+{
+  "suite": "decisions",
+  "scope": "Synthetic next-action diagnostics; not browser completion",
+  "pricing": {
+    "jev_input_usd_per_million": 0.042,
+    "checked": "2026-09-22",
+    "source": "https://docs.typesafe.ai/models",
+    "excludes": "local compute, browser hosting, parent agent"
+  },
+  "configuration": {
+    "TYPESAFE_MODEL": "jev-1.13.0",
+    "TEXT_MODEL": "inception/mercury-2.5",
+    "TEXT_MODEL_BASE_URL": "https://openrouter.ai/api/v1",
+    "TEXT_MODEL_REASONING": "none"
+  },
+  "arguments": {
+    "suite": "decisions",
+    "backends": [
+      "laya"
+    ],
+    "repeats": 3,
+    "warmups": 1,
+    "max_decisions": 20,
+    "device": "mps",
+    "checkpoint": "english",
+    "max_len": null,
+    "head_max_len": null,
+    "output": "artifacts/comparison/laya-raw-mps-repeated"
+  },
+  "system": {
+    "os": "Darwin",
+    "architecture": "arm64",
+    "python": "3.12.2"
+  },
+  "source_hashes": {
+    "jev_ultrafast/__init__.py": "60f025b8d24465e2c0f7a3547d43b8020fd8843de7b6cb3f892ef63f5548cf63",
+    "jev_ultrafast/agent.py": "b6e52461483d70d7d14017f99e13ab80bfabbefd8fff75b4fa88975b718ef823",
+    "jev_ultrafast/browser.py": "ee08dafa93d731bd292aa0263a578a29c8001cf22eef3c59fe44a159649155ee",
+    "jev_ultrafast/demo.py": "a0cfb10909b370efb284cbbe16bdb4b7e7e06ba6385827404169027645a1d8a4",
+    "jev_ultrafast/laya_backend.py": "028a04ad0fd54284bb7a74e968b3deaa0daf4bcb59d279c02af13902f009f51f",
+    "jev_ultrafast/model.py": "f7013336693d725cc70bfe22f36213e1e690b70b1838e3a8594625e23fa0ab10",
+    "jev_ultrafast/questions.py": "66a7054b85040b949e1757311257ea0c5a843c635f9a40c99f6d15ad660fb422",
+    "jev_ultrafast/snapshot.js": "e50473501c8fb8e70f3b21866d987393e3f2315c639d638bd477d170e81ed78d",
+    "scripts/compare.py": "7480e9edca5328b7fc5e4741dd750cc92debad09e0a501bfc19a36b28df7ca00",
+    "benchmarks/decisions.json": "3c601e69114eb25dd2652358ab6faeb626756a22f19f821bfa48ba2a0322f166"
+  },
+  "load_ms": {
+    "laya": 54621
+  },
+  "summary": {
+    "laya": {
+      "attempts": 36,
+      "passed": 12,
+      "pass_rate": 0.3333333333333333,
+      "errors": 0,
+      "latency_p50_ms": 1008.0,
+      "latency_p95_ms": 1778,
+      "estimated_jev_cost_usd": 0.0,
+      "reported_text_cost_usd": 0,
+      "model_usd_per_success": 0.0,
+      "cost_incomplete": false
+    }
+  },
+  "hardware": {
+    "chip": "Apple M2",
+    "memory_gib": 24,
+    "device": "mps",
+    "inference_dtype": "float32"
+  },
+  "raw_results_sha256": "73806306bfe9af3c2a82af2b25739120d1788278b000adfdf2cd3cd47679485d",
+  "rows": [
+    {
+      "backend": "laya",
+      "case": "fill-destination",
+      "phase": "warmup",
+      "repeat": 0,
+      "passed": false,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 1717,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "e2",
+      "operation": "CLICK",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 116,
+          "state_tokens_retained": 116,
+          "state_truncated": false
+        },
+        "type_text_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 116,
+          "state_tokens_retained": 116,
+          "state_truncated": false
+        },
+        "click_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 116,
+          "state_tokens_retained": 116,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "fill-destination",
+      "phase": "measured",
+      "repeat": 0,
+      "passed": false,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 1458,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "e2",
+      "operation": "CLICK",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 116,
+          "state_tokens_retained": 116,
+          "state_truncated": false
+        },
+        "type_text_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 116,
+          "state_tokens_retained": 116,
+          "state_truncated": false
+        },
+        "click_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 116,
+          "state_tokens_retained": 116,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "submit-filled-search",
+      "phase": "measured",
+      "repeat": 0,
+      "passed": true,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 1498,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "e2",
+      "operation": "CLICK",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 121,
+          "state_tokens_retained": 121,
+          "state_truncated": false
+        },
+        "type_text_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 121,
+          "state_tokens_retained": 121,
+          "state_truncated": false
+        },
+        "click_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 121,
+          "state_tokens_retained": 121,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "autocomplete",
+      "phase": "measured",
+      "repeat": 0,
+      "passed": false,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 979,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "e1",
+      "operation": "CLICK",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 123,
+          "state_tokens_retained": 123,
+          "state_truncated": false
+        },
+        "click_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 123,
+          "state_tokens_retained": 123,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "enable-checkbox",
+      "phase": "measured",
+      "repeat": 0,
+      "passed": false,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 1002,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "BLOCKED",
+      "operation": "BLOCKED",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 114,
+          "state_tokens_retained": 114,
+          "state_truncated": false
+        },
+        "click_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 114,
+          "state_tokens_retained": 114,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "already-enabled-submit",
+      "phase": "measured",
+      "repeat": 0,
+      "passed": false,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 1902,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "e2",
+      "operation": "CLICK",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 159,
+          "state_tokens_retained": 159,
+          "state_truncated": false
+        },
+        "type_text_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 159,
+          "state_tokens_retained": 159,
+          "state_truncated": false
+        },
+        "click_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 159,
+          "state_tokens_retained": 159,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "native-select",
+      "phase": "measured",
+      "repeat": 0,
+      "passed": true,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 1133,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "e1",
+      "operation": "SELECT",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 130,
+          "state_tokens_retained": 130,
+          "state_truncated": false
+        },
+        "select_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 130,
+          "state_tokens_retained": 130,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "open-result",
+      "phase": "measured",
+      "repeat": 0,
+      "passed": false,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 1184,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "e1",
+      "operation": "CLICK",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 162,
+          "state_tokens_retained": 162,
+          "state_truncated": false
+        },
+        "click_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 162,
+          "state_tokens_retained": 162,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "already-complete",
+      "phase": "measured",
+      "repeat": 0,
+      "passed": false,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 927,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "e1",
+      "operation": "CLICK",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 104,
+          "state_tokens_retained": 104,
+          "state_truncated": false
+        },
+        "click_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 104,
+          "state_tokens_retained": 104,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "loading",
+      "phase": "measured",
+      "repeat": 0,
+      "passed": false,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 370,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "DONE",
+      "operation": "DONE",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 48,
+          "state_tokens_retained": 48,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "unsupported",
+      "phase": "measured",
+      "repeat": 0,
+      "passed": true,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 371,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "BLOCKED",
+      "operation": "BLOCKED",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 53,
+          "state_tokens_retained": 53,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "many-targets",
+      "phase": "measured",
+      "repeat": 0,
+      "passed": false,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 1637,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "e1",
+      "operation": "CLICK",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 686,
+          "state_tokens_retained": 316,
+          "state_truncated": true
+        },
+        "click_target": {
+          "instruction_truncated": true,
+          "options_truncated": 20,
+          "options_dropped": 0,
+          "state_tokens": 686,
+          "state_tokens_retained": 316,
+          "state_truncated": true
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "scroll",
+      "phase": "measured",
+      "repeat": 0,
+      "passed": true,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 381,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "scroll_down",
+      "operation": "SCROLL_DOWN",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 45,
+          "state_tokens_retained": 45,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "fill-destination",
+      "phase": "measured",
+      "repeat": 1,
+      "passed": false,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 1461,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "e2",
+      "operation": "CLICK",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 116,
+          "state_tokens_retained": 116,
+          "state_truncated": false
+        },
+        "type_text_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 116,
+          "state_tokens_retained": 116,
+          "state_truncated": false
+        },
+        "click_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 116,
+          "state_tokens_retained": 116,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "submit-filled-search",
+      "phase": "measured",
+      "repeat": 1,
+      "passed": true,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 1487,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "e2",
+      "operation": "CLICK",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 121,
+          "state_tokens_retained": 121,
+          "state_truncated": false
+        },
+        "type_text_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 121,
+          "state_tokens_retained": 121,
+          "state_truncated": false
+        },
+        "click_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 121,
+          "state_tokens_retained": 121,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "autocomplete",
+      "phase": "measured",
+      "repeat": 1,
+      "passed": false,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 953,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "e1",
+      "operation": "CLICK",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 123,
+          "state_tokens_retained": 123,
+          "state_truncated": false
+        },
+        "click_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 123,
+          "state_tokens_retained": 123,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "enable-checkbox",
+      "phase": "measured",
+      "repeat": 1,
+      "passed": false,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 927,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "BLOCKED",
+      "operation": "BLOCKED",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 114,
+          "state_tokens_retained": 114,
+          "state_truncated": false
+        },
+        "click_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 114,
+          "state_tokens_retained": 114,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "already-enabled-submit",
+      "phase": "measured",
+      "repeat": 1,
+      "passed": false,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 1724,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "e2",
+      "operation": "CLICK",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 159,
+          "state_tokens_retained": 159,
+          "state_truncated": false
+        },
+        "type_text_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 159,
+          "state_tokens_retained": 159,
+          "state_truncated": false
+        },
+        "click_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 159,
+          "state_tokens_retained": 159,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "native-select",
+      "phase": "measured",
+      "repeat": 1,
+      "passed": true,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 1010,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "e1",
+      "operation": "SELECT",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 130,
+          "state_tokens_retained": 130,
+          "state_truncated": false
+        },
+        "select_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 130,
+          "state_tokens_retained": 130,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "open-result",
+      "phase": "measured",
+      "repeat": 1,
+      "passed": false,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 1124,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "e1",
+      "operation": "CLICK",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 162,
+          "state_tokens_retained": 162,
+          "state_truncated": false
+        },
+        "click_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 162,
+          "state_tokens_retained": 162,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "already-complete",
+      "phase": "measured",
+      "repeat": 1,
+      "passed": false,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 900,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "e1",
+      "operation": "CLICK",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 104,
+          "state_tokens_retained": 104,
+          "state_truncated": false
+        },
+        "click_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 104,
+          "state_tokens_retained": 104,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "loading",
+      "phase": "measured",
+      "repeat": 1,
+      "passed": false,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 351,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "DONE",
+      "operation": "DONE",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 48,
+          "state_tokens_retained": 48,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "unsupported",
+      "phase": "measured",
+      "repeat": 1,
+      "passed": true,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 363,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "BLOCKED",
+      "operation": "BLOCKED",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 53,
+          "state_tokens_retained": 53,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "many-targets",
+      "phase": "measured",
+      "repeat": 1,
+      "passed": false,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 1663,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "e1",
+      "operation": "CLICK",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 686,
+          "state_tokens_retained": 316,
+          "state_truncated": true
+        },
+        "click_target": {
+          "instruction_truncated": true,
+          "options_truncated": 20,
+          "options_dropped": 0,
+          "state_tokens": 686,
+          "state_tokens_retained": 316,
+          "state_truncated": true
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "scroll",
+      "phase": "measured",
+      "repeat": 1,
+      "passed": true,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 359,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "scroll_down",
+      "operation": "SCROLL_DOWN",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 45,
+          "state_tokens_retained": 45,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "fill-destination",
+      "phase": "measured",
+      "repeat": 2,
+      "passed": false,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 1465,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "e2",
+      "operation": "CLICK",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 116,
+          "state_tokens_retained": 116,
+          "state_truncated": false
+        },
+        "type_text_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 116,
+          "state_tokens_retained": 116,
+          "state_truncated": false
+        },
+        "click_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 116,
+          "state_tokens_retained": 116,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "submit-filled-search",
+      "phase": "measured",
+      "repeat": 2,
+      "passed": true,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 1511,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "e2",
+      "operation": "CLICK",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 121,
+          "state_tokens_retained": 121,
+          "state_truncated": false
+        },
+        "type_text_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 121,
+          "state_tokens_retained": 121,
+          "state_truncated": false
+        },
+        "click_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 121,
+          "state_tokens_retained": 121,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "autocomplete",
+      "phase": "measured",
+      "repeat": 2,
+      "passed": false,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 1006,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "e1",
+      "operation": "CLICK",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 123,
+          "state_tokens_retained": 123,
+          "state_truncated": false
+        },
+        "click_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 123,
+          "state_tokens_retained": 123,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "enable-checkbox",
+      "phase": "measured",
+      "repeat": 2,
+      "passed": false,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 951,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "BLOCKED",
+      "operation": "BLOCKED",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 114,
+          "state_tokens_retained": 114,
+          "state_truncated": false
+        },
+        "click_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 114,
+          "state_tokens_retained": 114,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "already-enabled-submit",
+      "phase": "measured",
+      "repeat": 2,
+      "passed": false,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 1778,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "e2",
+      "operation": "CLICK",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 159,
+          "state_tokens_retained": 159,
+          "state_truncated": false
+        },
+        "type_text_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 159,
+          "state_tokens_retained": 159,
+          "state_truncated": false
+        },
+        "click_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 159,
+          "state_tokens_retained": 159,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "native-select",
+      "phase": "measured",
+      "repeat": 2,
+      "passed": true,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 1038,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "e1",
+      "operation": "SELECT",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 130,
+          "state_tokens_retained": 130,
+          "state_truncated": false
+        },
+        "select_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 130,
+          "state_tokens_retained": 130,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "open-result",
+      "phase": "measured",
+      "repeat": 2,
+      "passed": false,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 1116,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "e1",
+      "operation": "CLICK",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 162,
+          "state_tokens_retained": 162,
+          "state_truncated": false
+        },
+        "click_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 162,
+          "state_tokens_retained": 162,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "already-complete",
+      "phase": "measured",
+      "repeat": 2,
+      "passed": false,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 917,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "e1",
+      "operation": "CLICK",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 104,
+          "state_tokens_retained": 104,
+          "state_truncated": false
+        },
+        "click_target": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 104,
+          "state_tokens_retained": 104,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "loading",
+      "phase": "measured",
+      "repeat": 2,
+      "passed": false,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 360,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "DONE",
+      "operation": "DONE",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 48,
+          "state_tokens_retained": 48,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "unsupported",
+      "phase": "measured",
+      "repeat": 2,
+      "passed": true,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 348,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "BLOCKED",
+      "operation": "BLOCKED",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 53,
+          "state_tokens_retained": 53,
+          "state_truncated": false
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "many-targets",
+      "phase": "measured",
+      "repeat": 2,
+      "passed": false,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 1614,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "e1",
+      "operation": "CLICK",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 686,
+          "state_tokens_retained": 316,
+          "state_truncated": true
+        },
+        "click_target": {
+          "instruction_truncated": true,
+          "options_truncated": 20,
+          "options_dropped": 0,
+          "state_tokens": 686,
+          "state_tokens_retained": 316,
+          "state_truncated": true
+        }
+      }
+    },
+    {
+      "backend": "laya",
+      "case": "scroll",
+      "phase": "measured",
+      "repeat": 2,
+      "passed": true,
+      "error": null,
+      "jev_input_tokens": 0,
+      "reported_text_cost_usd": 0,
+      "elapsed_ms": 358,
+      "decision_requests": 1,
+      "text_cost_missing": false,
+      "choice": "scroll_down",
+      "operation": "SCROLL_DOWN",
+      "input_audit": {
+        "operation": {
+          "instruction_truncated": true,
+          "options_truncated": 0,
+          "options_dropped": 0,
+          "state_tokens": 45,
+          "state_tokens_retained": 45,
+          "state_truncated": false
+        }
+      }
+    }
+  ]
+}

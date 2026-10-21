@@ -1,0 +1,536 @@
+[
+  {
+    "id": "fill-destination",
+    "goal": "Enter Lisbon in the Destination field.",
+    "state": {
+      "url": "https://fixture.test/",
+      "title": "Browser decision diagnostic",
+      "text": "Destination is empty. Search for a place to stay.",
+      "actions": [
+        {
+          "id": "e1",
+          "kind": "fill",
+          "node": 1,
+          "label": "Destination",
+          "role": "textbox",
+          "value": ""
+        },
+        {
+          "id": "e2",
+          "kind": "click",
+          "node": 2,
+          "label": "Find stays",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "wait",
+          "kind": "wait",
+          "label": "Wait for page update"
+        }
+      ]
+    },
+    "expected_choices": [
+      "e1"
+    ]
+  },
+  {
+    "id": "submit-filled-search",
+    "goal": "Search for stays in Lisbon.",
+    "state": {
+      "url": "https://fixture.test/",
+      "title": "Browser decision diagnostic",
+      "text": "Destination: Lisbon. Press Find stays to apply this search.",
+      "actions": [
+        {
+          "id": "e1",
+          "kind": "fill",
+          "node": 1,
+          "label": "Destination",
+          "role": "textbox",
+          "value": "Lisbon"
+        },
+        {
+          "id": "e2",
+          "kind": "click",
+          "node": 2,
+          "label": "Find stays",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "wait",
+          "kind": "wait",
+          "label": "Wait for page update"
+        }
+      ]
+    },
+    "expected_choices": [
+      "e2"
+    ]
+  },
+  {
+    "id": "autocomplete",
+    "goal": "Select the London, United Kingdom autocomplete suggestion.",
+    "state": {
+      "url": "https://fixture.test/",
+      "title": "Browser decision diagnostic",
+      "text": "Where to? London. Suggestions: London, United Kingdom; London, Canada.",
+      "actions": [
+        {
+          "id": "e1",
+          "kind": "click",
+          "node": 1,
+          "label": "London, Canada",
+          "role": "option",
+          "value": ""
+        },
+        {
+          "id": "e2",
+          "kind": "click",
+          "node": 2,
+          "label": "London, United Kingdom",
+          "role": "option",
+          "value": ""
+        },
+        {
+          "id": "wait",
+          "kind": "wait",
+          "label": "Wait for page update"
+        }
+      ]
+    },
+    "expected_choices": [
+      "e2"
+    ]
+  },
+  {
+    "id": "enable-checkbox",
+    "goal": "Enable Free cancellation.",
+    "state": {
+      "url": "https://fixture.test/",
+      "title": "Browser decision diagnostic",
+      "text": "Free cancellation is currently off.",
+      "actions": [
+        {
+          "id": "e1",
+          "kind": "click",
+          "node": 1,
+          "label": "Free cancellation",
+          "role": "checkbox",
+          "value": "",
+          "checked": "false"
+        },
+        {
+          "id": "e2",
+          "kind": "click",
+          "node": 2,
+          "label": "Find stays",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "wait",
+          "kind": "wait",
+          "label": "Wait for page update"
+        }
+      ]
+    },
+    "expected_choices": [
+      "e1"
+    ]
+  },
+  {
+    "id": "already-enabled-submit",
+    "goal": "Search for Lisbon stays with Free cancellation enabled.",
+    "state": {
+      "url": "https://fixture.test/",
+      "title": "Browser decision diagnostic",
+      "text": "Destination Lisbon. Free cancellation checked. Search has not been submitted.",
+      "actions": [
+        {
+          "id": "e1",
+          "kind": "fill",
+          "node": 1,
+          "label": "Destination",
+          "role": "textbox",
+          "value": "Lisbon"
+        },
+        {
+          "id": "e2",
+          "kind": "click",
+          "node": 2,
+          "label": "Free cancellation",
+          "role": "checkbox",
+          "value": "",
+          "checked": "true"
+        },
+        {
+          "id": "e3",
+          "kind": "click",
+          "node": 3,
+          "label": "Find stays",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "wait",
+          "kind": "wait",
+          "label": "Wait for page update"
+        }
+      ]
+    },
+    "expected_choices": [
+      "e3"
+    ]
+  },
+  {
+    "id": "native-select",
+    "goal": "Change Stay category to Design.",
+    "state": {
+      "url": "https://fixture.test/",
+      "title": "Browser decision diagnostic",
+      "text": "Stay category is All stays.",
+      "actions": [
+        {
+          "id": "e1",
+          "kind": "select",
+          "node": 1,
+          "label": "Stay category → Design",
+          "role": "combobox",
+          "value": "Design",
+          "current_value": "All stays"
+        },
+        {
+          "id": "e2",
+          "kind": "select",
+          "node": 1,
+          "label": "Stay category → Nature",
+          "role": "combobox",
+          "value": "Nature",
+          "current_value": "All stays"
+        },
+        {
+          "id": "wait",
+          "kind": "wait",
+          "label": "Wait for page update"
+        }
+      ]
+    },
+    "expected_choices": [
+      "e1"
+    ]
+  },
+  {
+    "id": "open-result",
+    "goal": "Open the Casa Flora property details.",
+    "state": {
+      "url": "https://fixture.test/",
+      "title": "Browser decision diagnostic",
+      "text": "Lisbon results: Casa Flora, Casa Azul, Casa Verde.",
+      "actions": [
+        {
+          "id": "e1",
+          "kind": "click",
+          "node": 1,
+          "label": "View Casa Azul",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "e2",
+          "kind": "click",
+          "node": 2,
+          "label": "View Casa Flora",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "e3",
+          "kind": "click",
+          "node": 3,
+          "label": "View Casa Verde",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "wait",
+          "kind": "wait",
+          "label": "Wait for page update"
+        }
+      ]
+    },
+    "expected_choices": [
+      "e2"
+    ]
+  },
+  {
+    "id": "already-complete",
+    "goal": "Open the Casa Flora property details.",
+    "state": {
+      "url": "https://fixture.test/#casa-flora",
+      "title": "Browser decision diagnostic",
+      "text": "Casa Flora property details. Lisbon, Design. Free cancellation included. Your filters: Design · Free cancellation enabled · Destination Lisbon.",
+      "actions": [
+        {
+          "id": "e1",
+          "kind": "click",
+          "node": 1,
+          "label": "All stays",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "wait",
+          "kind": "wait",
+          "label": "Wait for page update"
+        }
+      ]
+    },
+    "expected_choices": [
+      "DONE"
+    ]
+  },
+  {
+    "id": "loading",
+    "goal": "Wait for the search results to finish loading.",
+    "state": {
+      "url": "https://fixture.test/",
+      "title": "Browser decision diagnostic",
+      "text": "Search submitted. Loading results. Please wait.",
+      "actions": [
+        {
+          "id": "wait",
+          "kind": "wait",
+          "label": "Wait for page update"
+        }
+      ]
+    },
+    "expected_choices": [
+      "wait"
+    ]
+  },
+  {
+    "id": "unsupported",
+    "goal": "Upload a PDF using the Upload control. Stop as blocked if no upload operation is supported.",
+    "state": {
+      "url": "https://fixture.test/",
+      "title": "Browser decision diagnostic",
+      "text": "Upload your PDF. This browser agent does not support file upload operations.",
+      "actions": [
+        {
+          "id": "wait",
+          "kind": "wait",
+          "label": "Wait for page update"
+        }
+      ]
+    },
+    "expected_choices": [
+      "BLOCKED"
+    ]
+  },
+  {
+    "id": "many-targets",
+    "goal": "Open the details for Property 17.",
+    "state": {
+      "url": "https://fixture.test/",
+      "title": "Browser decision diagnostic",
+      "text": "Choose one property to inspect.",
+      "actions": [
+        {
+          "id": "e1",
+          "kind": "click",
+          "node": 1,
+          "label": "View Property 1",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "e2",
+          "kind": "click",
+          "node": 2,
+          "label": "View Property 2",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "e3",
+          "kind": "click",
+          "node": 3,
+          "label": "View Property 3",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "e4",
+          "kind": "click",
+          "node": 4,
+          "label": "View Property 4",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "e5",
+          "kind": "click",
+          "node": 5,
+          "label": "View Property 5",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "e6",
+          "kind": "click",
+          "node": 6,
+          "label": "View Property 6",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "e7",
+          "kind": "click",
+          "node": 7,
+          "label": "View Property 7",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "e8",
+          "kind": "click",
+          "node": 8,
+          "label": "View Property 8",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "e9",
+          "kind": "click",
+          "node": 9,
+          "label": "View Property 9",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "e10",
+          "kind": "click",
+          "node": 10,
+          "label": "View Property 10",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "e11",
+          "kind": "click",
+          "node": 11,
+          "label": "View Property 11",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "e12",
+          "kind": "click",
+          "node": 12,
+          "label": "View Property 12",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "e13",
+          "kind": "click",
+          "node": 13,
+          "label": "View Property 13",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "e14",
+          "kind": "click",
+          "node": 14,
+          "label": "View Property 14",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "e15",
+          "kind": "click",
+          "node": 15,
+          "label": "View Property 15",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "e16",
+          "kind": "click",
+          "node": 16,
+          "label": "View Property 16",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "e17",
+          "kind": "click",
+          "node": 17,
+          "label": "View Property 17",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "e18",
+          "kind": "click",
+          "node": 18,
+          "label": "View Property 18",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "e19",
+          "kind": "click",
+          "node": 19,
+          "label": "View Property 19",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "e20",
+          "kind": "click",
+          "node": 20,
+          "label": "View Property 20",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "id": "wait",
+          "kind": "wait",
+          "label": "Wait for page update"
+        }
+      ]
+    },
+    "expected_choices": [
+      "e17"
+    ]
+  },
+  {
+    "id": "scroll",
+    "goal": "Scroll down to see more search results.",
+    "state": {
+      "url": "https://fixture.test/",
+      "title": "Browser decision diagnostic",
+      "text": "More search results are below.",
+      "actions": [
+        {
+          "id": "scroll_down",
+          "kind": "scroll",
+          "label": "Scroll down",
+          "delta": 560
+        },
+        {
+          "id": "wait",
+          "kind": "wait",
+          "label": "Wait for page update"
+        }
+      ]
+    },
+    "expected_choices": [
+      "scroll_down"
+    ]
+  }
+]

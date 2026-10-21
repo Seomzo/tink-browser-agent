@@ -78,7 +78,7 @@ def action_space(actions):
     return elements, targets, controls
 
 
-def choose(state, goal, history):
+def choose(state, goal, history, *, decision_model=None):
     elements, targets, controls = action_space(state["actions"])
     labels = {
         "CLICK": "Click an element, button, menu option, autocomplete suggestion, or calendar day.",
@@ -105,7 +105,7 @@ def choose(state, goal, history):
             "instructions": {"goal": goal, "operation": operation, "rules": [NEXT_ACTION, TARGET]},
         }
     body = {
-        "model": os.environ.get("TYPESAFE_MODEL", "jev-latest"),
+        "model": decision_model.model if decision_model is not None else os.environ.get("TYPESAFE_MODEL", "jev-latest"),
         "state": {
             "page": {k: state[k] for k in ("url", "title", "text")},
             "elements": elements,
@@ -116,7 +116,14 @@ def choose(state, goal, history):
         "questions": questions,
     }
     started = time.perf_counter()
-    result = post_json("https://api.typesafe.ai/v1/systemone", os.environ["TYPESAFE_API_KEY"], body)
+    result = (
+        decision_model.predict(body["state"], questions)
+        if decision_model is not None
+        else post_json(
+            os.environ.get("TYPESAFE_BASE_URL", "https://api.typesafe.ai").rstrip("/") + "/v1/systemone",
+            os.environ["TYPESAFE_API_KEY"], body,
+        )
+    )
     operation_answer = validate_choice(result["answers"].get("operation", {}), operations)
     operation = operation_answer["choice"]
     target = None
@@ -145,6 +152,7 @@ def choose(state, goal, history):
         "usage": result.get("usage", {}),
         "latency_ms": round((time.perf_counter() - started) * 1000),
         "request": body,
+        **({"backend": result["backend"]} if "backend" in result else {}),
     }
 
 
@@ -166,6 +174,18 @@ def field_text(context):
     reasoning = {"thinking": {"type": "disabled"}} if "api.deepseek.com/" in base else {"reasoning": {"effort": "low"}}
     if os.environ.get("TEXT_MODEL_REASONING") == "none":
         reasoning = {"reasoning": {"enabled": False}}
+    response_format = {"type": "json_object"}
+    if os.environ.get("TEXT_MODEL_RESPONSE_FORMAT") == "json_schema":
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "field_value", "strict": True,
+                "schema": {
+                    "type": "object", "properties": {"text": {"type": ["string", "null"]}},
+                    "required": ["text"], "additionalProperties": False,
+                },
+            },
+        }
     started = time.perf_counter()
     result = post_json(
         base + "/chat/completions",
@@ -173,7 +193,7 @@ def field_text(context):
         {
             "model": model,
             "max_tokens": 1024,
-            "response_format": {"type": "json_object"},
+            "response_format": response_format,
             **reasoning,
             "messages": [
                 {"role": "system", "content": TEXT_VALUE},
