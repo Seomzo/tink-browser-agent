@@ -18,6 +18,8 @@ class Agent:
             raise ValueError("Supply a task")
         plan = [task]
         self.pending_text = None
+        self.sensitive_values = set()
+        self.blocked_refresh_used = False
         self.decision_model = decision_model
         self.before_action = before_action
         self.browser = browser if browser is not None else Browser(url)
@@ -48,10 +50,19 @@ class Agent:
             (self.record_dir / "000000.jpg").write_bytes(base64.b64decode(page["screenshot"]))
 
     def snapshot(self):
-        return {
+        def redact(value):
+            if isinstance(value, str):
+                for secret in self.sensitive_values:
+                    value = value.replace(secret, "[redacted]")
+            elif isinstance(value, dict):
+                return {key: redact(item) for key, item in value.items()}
+            elif isinstance(value, list):
+                return [redact(item) for item in value]
+            return value
+        return redact({
             **{k: v for k, v in self.state.items() if k != "browser"},
             "elements": action_space(self.state["page"]["actions"])[0],
-        }
+        })
 
     def command(self, name, body=None):
         body = body or {}
@@ -97,6 +108,14 @@ class Agent:
             state["decision"] = None
             selected = decision["choice"]
             if selected in {"DONE", "BLOCKED"}:
+                if (selected == "BLOCKED" and not self.blocked_refresh_used
+                        and hasattr(state["browser"], "wait_for_change")):
+                    self.blocked_refresh_used = True
+                    refreshed = state["browser"].wait_for_change(page)
+                    if refreshed["fingerprint"] != page["fingerprint"]:
+                        state["page"] = refreshed
+                        state["status"] = "ready"
+                        return self.snapshot()
                 if not state["browser"].fresh(page):
                     state["status"] = "ready"
                     raise StalePage("Page changed since the decision. Choose again.")
@@ -118,12 +137,17 @@ class Agent:
                 else:
                     text, helper = field_text(context)
                     self.pending_text = (context, text, helper)
-                    state["text_calls"].append({**helper, "field": action["label"], "value": text})
+                    state["text_calls"].append({**helper, "field": action["label"],
+                                                "value": "[redacted]" if action.get("sensitive") else text})
+                if action.get("sensitive") and text:
+                    self.sensitive_values.add(text)
             if self.before_action is not None:
                 self.before_action(action, page, text)
             # Browser.act checks freshness immediately before input, including after approval and text generation.
             state["browser"].act(action, page, text=text)
             self.pending_text = None
+            if action["kind"] != "wait":
+                self.blocked_refresh_used = False
             state["elapsed_ms"] = round((time.perf_counter() - state["started_at"]) * 1000)
             # Record execution before observing. A stale post-action observation must not erase the action.
             state["history"].append(
@@ -135,7 +159,7 @@ class Agent:
                     "probability": decision["probabilities"][selected],
                     "confidence": decision["confidence"],
                     "latency_ms": decision["latency_ms"],
-                    "text": text,
+                    "text": "[redacted]" if action.get("sensitive") else text,
                     "text_helper": helper["model"] if helper else None,
                     "text_latency_ms": helper["latency_ms"] if helper else 0,
                     "operation": decision["operation"],

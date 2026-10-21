@@ -162,6 +162,8 @@ def runner():
     a = loop.Agent.__new__(loop.Agent)
     a.screenshots = False
     a.pending_text = None
+    a.sensitive_values = set()
+    a.blocked_refresh_used = False
     a.decision_model = None
     a.before_action = None
     p = page()
@@ -320,3 +322,35 @@ def test_navigation_during_prediction_reobserves_without_action(runner):
     assert runner.state["status"] == "ready"
     assert runner.state["decision"] is None
     runner.state["browser"].act.assert_not_called()
+
+
+def test_password_history_and_snapshot_are_redacted(runner, monkeypatch):
+    secret = 'fixture-password-123'
+    runner.state['page']['actions'][0]['sensitive'] = True
+    runner.state['goal'] = 'Login using ' + secret
+    monkeypatch.setattr(loop, 'field_text', Mock(return_value=(secret, {'model': 'test', 'latency_ms': 1})))
+    snapshot = runner.command('act', {'fingerprint': runner.state['page']['fingerprint']})
+    assert runner.state['browser'].act.call_args.kwargs['text'] == secret
+    assert secret not in json.dumps(snapshot)
+    assert runner.state['history'][0]['text'] == '[redacted]'
+    assert runner.state['text_calls'][0]['value'] == '[redacted]'
+
+
+def test_blocked_during_transition_refreshes_without_mutation(runner):
+    runner.state['decision'] = decision('BLOCKED')
+    refreshed = deepcopy(runner.state['page'])
+    refreshed['fingerprint'] = 'password-page'
+    runner.state['browser'].wait_for_change.return_value = refreshed
+    runner.command('act', {'fingerprint': runner.state['page']['fingerprint']})
+    assert runner.state['status'] == 'ready'
+    assert runner.state['page'] == refreshed
+    runner.state['browser'].act.assert_not_called()
+
+
+def test_changing_countdown_cannot_repeatedly_revive_blocked(runner):
+    runner.state['browser'].wait_for_change.return_value = {**runner.state['page'], 'fingerprint': 'tick'}
+    for _ in range(2):
+        runner.state['decision'] = decision('BLOCKED')
+        runner.command('act', {'fingerprint': runner.state['page']['fingerprint']})
+    assert runner.state['status'] == 'blocked'
+    assert runner.state['browser'].wait_for_change.call_count == 1

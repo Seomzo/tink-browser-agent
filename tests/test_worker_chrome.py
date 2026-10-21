@@ -165,3 +165,92 @@ def test_parent_owned_temp_directory_removes_profile_after_hard_kill(tmp_path, f
         assert profiles[0].exists()  # The killed worker could not run its own cleanup.
     assert not Path(workdir).exists()
     assert not profiles[0].exists()
+
+
+def test_delayed_password_login_masks_values_and_preserves_freshness(monkeypatch):
+    from jev_ultrafast.browser import Browser, StalePage
+    from jev_ultrafast.worker_browser import OwnedChrome
+
+    secret = 'fixture-password-123'
+    class Login(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = b'''<!doctype html><title>Login fixture</title><body><script>
+            setTimeout(()=>{document.body.innerHTML=`<label>Username<input id="user"></label>
+            <button id="next">Next</button>`;
+            document.querySelector('#next').onclick=()=>setTimeout(()=>{
+              document.body.innerHTML=`<label>Password<input id="pw" type="password"></label>
+              <button id="login">Login</button><p></p>`;
+              document.querySelector('#login').onclick=()=>{
+                if(document.querySelector('#pw').value==='fixture-password-123')
+                  document.querySelector('p').textContent='Authenticated fixture';
+              };
+            },350);},350);</script>'''
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html')
+            self.end_headers()
+            self.wfile.write(body)
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Login)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv('TINK_BROWSER_HEADLESS', '1')
+    try:
+        with OwnedChrome() as chrome:
+            browser = Browser(f'http://127.0.0.1:{server.server_port}', transport=chrome.call)
+            try:
+                page = browser.observe(screenshot=False)
+                assert 'Username' in page['text']  # Initial empty SPA must settle.
+                field = next(a for a in page['actions'] if a['kind'] == 'fill')
+                browser.act(field, page, text='fixture-user')
+                page = browser.observe(screenshot=False)
+                next_button = next(a for a in page['actions'] if a['label'] == 'Next')
+                browser.act(next_button, page)
+                page = browser.observe(screenshot=False)
+                deadline = time.monotonic() + 3
+                while not any(a.get('sensitive') for a in page['actions']) and time.monotonic() < deadline:
+                    page = browser.wait_for_change(page)
+                field = next(a for a in page['actions'] if a['kind'] == 'fill' and a.get('sensitive'))
+                browser.act(field, page, text=secret)
+                page = browser.observe(screenshot=False)
+                assert secret not in json.dumps(page)
+                field = next(a for a in page['actions'] if a['kind'] == 'fill')
+                assert field['value'] == '[filled]'
+                button = next(a for a in page['actions'] if a['label'] == 'Login')
+                # Another password with the same length must still invalidate a stale submit.
+                browser.evaluate("document.querySelector('#pw').value='different-secret-123'")
+                with pytest.raises(StalePage):
+                    browser.act(button, page)
+                page = browser.observe(screenshot=False)
+                field = next(a for a in page['actions'] if a['kind'] == 'fill')
+                browser.act(field, page, text=secret)
+                page = browser.observe(screenshot=False)
+                button = next(a for a in page['actions'] if a['label'] == 'Login')
+                browser.act(button, page)
+                assert 'Authenticated fixture' in browser.observe(screenshot=False)['text']
+                browser.evaluate("document.body.innerHTML='<h1>SMS/Email Authentication</h1>' +"
+                                 "'<p>Enter the code sent to your phone</p><input placeholder=\"Type Here\">'")
+                assert browser.observe(screenshot=False)['authenticationRequired'] is True
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_saved_profile_keeps_cookie_and_excludes_concurrent_owner(monkeypatch, tmp_path, fixture_url):
+    from jev_ultrafast.browser import Browser
+    from jev_ultrafast.worker_browser import OwnedChrome
+    monkeypatch.setenv('TINK_BROWSER_HEADLESS', '1')
+    monkeypatch.setenv('TINK_BROWSER_PROFILE_DIR', str(tmp_path / 'saved'))
+    with OwnedChrome() as chrome:
+        browser = Browser(fixture_url, transport=chrome.call)
+        browser.evaluate("document.cookie='fixture_login=yes; max-age=3600; path=/'")
+        with pytest.raises(RuntimeError, match='profile_busy'):
+            with OwnedChrome():
+                pass
+        browser.close()
+    with OwnedChrome() as chrome:
+        browser = Browser(fixture_url, transport=chrome.call)
+        assert 'fixture_login=yes' in browser.evaluate('document.cookie')
+        browser.close()

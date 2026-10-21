@@ -88,16 +88,32 @@ class Browser:
                 )
             except RuntimeError:
                 pass
-        for attempt in range(10):
+        empty_deadline = time.monotonic() + 2
+        for attempt in range(110):
             try:
-                return browser_operation(
+                page = browser_operation(
                     {"operation": "observe", "session": self.session, "screenshot": screenshot}, transport=self._cdp
                 )
+                if (not page["text"].strip() and not any(a["kind"] in {"click", "fill", "select"}
+                        for a in page["actions"]) and time.monotonic() < empty_deadline):
+                    time.sleep(0.02)
+                    continue
+                return page
             except StalePage:
-                if attempt == 9:
+                if attempt == 109:
                     raise
                 time.sleep(0.02)
         raise StalePage("Page did not settle")
+
+    def wait_for_change(self, page, timeout=1.5):
+        """Give a pending SPA transition a bounded chance before accepting BLOCKED."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            current = self.observe(screenshot=False)
+            if current["fingerprint"] != page["fingerprint"]:
+                return current
+            time.sleep(0.05)
+        return page
 
     def fresh(self, page, action=None):
         if action is not None and action["kind"] in {"click", "select"}:

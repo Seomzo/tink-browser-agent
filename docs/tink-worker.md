@@ -49,9 +49,10 @@ detection for that check; a start message can supply `chrome_path` for execution
 
 ## Sessions and supported scope
 
-Each job gets a disposable Chrome profile and a visible controlled tab. No cookies
-or saved logins are inherited, downloads are disabled, and the browser closes on
-completion. This first release supports macOS and Linux. The existing DOM/control
+Each job gets an owned Chrome window and a visible controlled tab. The host can
+enable saved cookies within its own Tink profile; otherwise Chrome is disposable.
+Downloads are disabled, and Chrome closes cleanly on completion to save site data.
+This first release supports macOS and Linux. The existing DOM/control
 limitations still apply, including frames, shadow roots, popups and uploads.
 
 This is the attributed Jev fork with MIT notices preserved. It is not the original
@@ -72,3 +73,48 @@ The Tink app repository also includes an explicit opt-in paid smoke script that
 tests its central-agent-to-worker path and independently verifies a synthetic
 vehicle search. Keep that integration evidence separate from general browsing
 reliability or the earlier upstream performance measurements.
+
+## Password login and delayed pages
+
+Visible password inputs are supported as masked text fields. Observations expose
+only empty/filled status and a page-local revision for freshness checks, never
+the field value. Password fills are masked in approval proposals, action history,
+and recorded snapshots after the text helper supplies the value. Service API
+keys remain forbidden as browser input.
+
+The current text helper still obtains login values from the supplied task goal;
+that goal is sent to hosted models. This is not a credential vault or a guarantee
+that credentials supplied in chat are absent from chat storage. Do not describe
+this path as local-only credential injection.
+
+Empty initial pages get a bounded rendering wait. Before accepting BLOCKED, the
+worker waits briefly for a changed observation and re-plans if the page changed.
+It does not replay submitted actions. Each task owns its Chrome process; saved
+profiles and verification handoff are described below. CAPTCHA, frames, and
+popup-based SSO are not covered by password-field support.
+
+Local desktop validation (2026-09-23): the patched worker filled the username,
+clicked Next, filled the password, and clicked Login on Tekion. Captured evidence
+then showed SMS/Email Authentication. No verification code was supplied and no
+repair-order records were retrieved. This proves password-form progress, not an
+end-to-end authenticated workflow or a speed advantage. The live run ended with
+a generic worker error after repeated MFA observations; the subsequent change
+bounds BLOCKED recovery to once per non-wait action and tells the policy not to
+wait on missing MFA codes. That follow-up has offline coverage, not a repeated
+live Tekion validation. Interactive verification handoff is now implemented and covered by offline tests; live validation is recorded separately.
+
+## Saved profile and verification handoff
+
+The host may set `TINK_BROWSER_PROFILE_DIR` to its own profile's browser-data
+directory. This path is host-owned, never a model-supplied argument. Chrome still
+closes after each task; cookies/site storage remain, subject to site expiration.
+A file lock rejects concurrent owners rather than attaching to another worker.
+Without this environment variable the worker remains disposable.
+
+Recognized verification-code screens emit one `human_required` event per task.
+The host shows its normal user-input prompt and returns `human_response` with
+`answer`: Continue after manual verification, a supplied code, or Cancel. The
+worker holds the same Chrome process and makes no model calls while waiting.
+Both host and worker deadlines receive a bounded 180-second handoff allowance.
+Missing callbacks, cancellation, EOF, and deadline expiry terminate the task.
+The flow does not configure email access or bypass CAPTCHA/MFA.

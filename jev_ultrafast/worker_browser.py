@@ -1,5 +1,6 @@
-"""A disposable Chrome owned by one worker; never attach to an existing profile."""
+"""Chrome owned by one worker, with optional exclusive saved profile storage."""
 
+import fcntl
 import json
 import os
 import shutil
@@ -31,6 +32,7 @@ class OwnedChrome:
     def __init__(self, binary=None):
         self.binary = binary
         self.profile = None
+        self.profile_lock = None
         self.process = None
         self.socket = None
         self.sequence = 0
@@ -40,9 +42,24 @@ class OwnedChrome:
         if sys.platform == "win32":
             raise RuntimeError("unsupported_platform")
         binary = chrome_binary(self.binary)
-        self.profile = tempfile.TemporaryDirectory(prefix="tink-browser-")
+        saved = os.environ.get("TINK_BROWSER_PROFILE_DIR")
+        if saved:
+            profile_dir = Path(saved)
+            profile_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            self.profile_lock = (profile_dir / '.tink-worker.lock').open('a')
+            try:
+                fcntl.flock(self.profile_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                self.profile_lock.close()
+                self.profile_lock = None
+                raise RuntimeError("browser_profile_busy") from None
+            # A previous process may have been killed; never attach using an old port.
+            (profile_dir / 'DevToolsActivePort').unlink(missing_ok=True)
+        else:
+            self.profile = tempfile.TemporaryDirectory(prefix="tink-browser-")
+            profile_dir = Path(self.profile.name)
         args = [
-            binary, f"--user-data-dir={self.profile.name}", "--remote-debugging-port=0",
+            binary, f"--user-data-dir={profile_dir}", "--remote-debugging-port=0",
             "--remote-debugging-address=127.0.0.1", "--no-first-run", "--no-default-browser-check",
             "--disable-sync", "--disable-extensions", "--disable-background-networking",
             "--disable-component-update", "--disable-default-apps", "--password-store=basic",
@@ -59,7 +76,7 @@ class OwnedChrome:
                 args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 env=chrome_env,
             )
-            port_file = Path(self.profile.name) / "DevToolsActivePort"
+            port_file = profile_dir / "DevToolsActivePort"
             deadline = time.monotonic() + 15
             while not port_file.is_file():
                 if self.process.poll() is not None or time.monotonic() >= deadline:
@@ -69,7 +86,7 @@ class OwnedChrome:
             if not port.isdigit() or not socket_path.startswith("/devtools/browser/"):
                 raise RuntimeError("chrome_start_failed")
             self.socket = connect(
-                f"ws://127.0.0.1:{int(port)}{socket_path}", proxy=None, open_timeout=5, close_timeout=1,
+                f"ws://127.0.0.1:{int(port)}{socket_path}", proxy=None, open_timeout=15, close_timeout=1,
                 max_size=8 * 1024 * 1024,
             )
             self.call("Browser.setDownloadBehavior", behavior="deny")
@@ -97,13 +114,23 @@ class OwnedChrome:
             return reply.get("result", {})
 
     def close(self):
+        closing = False
         if self.socket is not None:
             try:
+                # Browser.close flushes cookies/storage; SIGTERM can lose recent logins.
+                self.sequence += 1
+                self.socket.send(json.dumps({"id": self.sequence, "method": "Browser.close"}))
+                closing = True
                 self.socket.close()
             except Exception:
                 pass
             self.socket = None
         if self.process is not None:
+            if closing:
+                try:
+                    self.process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    pass
             if self.process.poll() is None:
                 self.process.terminate()
                 try:
@@ -115,6 +142,10 @@ class OwnedChrome:
         if self.profile is not None:
             self.profile.cleanup()
             self.profile = None
+
+        if self.profile_lock is not None:
+            self.profile_lock.close()
+            self.profile_lock = None
 
     def __exit__(self, *_args):
         self.close()

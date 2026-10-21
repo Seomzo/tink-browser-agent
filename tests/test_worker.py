@@ -47,7 +47,8 @@ def setup_loop(monkeypatch, choices=("e1", "DONE"), responses=(True, True)):
     protocol = Protocol(io.StringIO(), output)
     for index, allow in enumerate(responses, 1):
         protocol.messages.put({"type": "action_response", "id": str(index), "allow": allow})
-    browser = Mock(observe=Mock(return_value=page()), fresh=Mock(return_value=True))
+    browser = Mock(observe=Mock(return_value=page()), fresh=Mock(return_value=True),
+                   wait_for_change=Mock(return_value=page()))
     chrome = Mock()
     chrome.__enter__ = Mock(return_value=chrome)
     chrome.__exit__ = Mock(return_value=False)
@@ -246,11 +247,14 @@ def test_cancel_interrupts_pending_approval_without_chrome():
             child.wait(timeout=5)
 
 
-def test_owned_chrome_launch_is_isolated_and_cleanup_is_owned(monkeypatch, tmp_path):
+@pytest.mark.parametrize("needs_termination", [False, True])
+def test_owned_chrome_launch_is_isolated_and_cleanup_is_owned(monkeypatch, tmp_path, needs_termination):
     profile = Mock(name=str(tmp_path))
     profile.name = str(tmp_path)
     (tmp_path / "DevToolsActivePort").write_text("12345\n/devtools/browser/owned\n")
-    process = Mock(pid=987, poll=Mock(return_value=None))
+    process = Mock(pid=987, poll=Mock(return_value=None if needs_termination else 0))
+    if needs_termination:
+        process.wait.side_effect = [subprocess.TimeoutExpired("chrome", 3), 0]
     socket = Mock(recv=Mock(return_value='{"id":1,"result":{}}'))
     monkeypatch.setenv("OPENROUTER_API_KEY", "do-not-pass-to-chrome")
     monkeypatch.setattr("jev_ultrafast.worker_browser.chrome_binary", lambda _=None: "/owned/chrome")
@@ -267,6 +271,30 @@ def test_owned_chrome_launch_is_isolated_and_cleanup_is_owned(monkeypatch, tmp_p
         assert "start_new_session" not in launch.call_args.kwargs  # Stays in host-owned process group.
         assert "OPENROUTER_API_KEY" not in launch.call_args.kwargs["env"]
         assert dict(os.environ) == dict(original)
-    process.terminate.assert_called_once()
-    process.wait.assert_called_once()
+    assert json.loads(socket.send.call_args.args[0])["method"] == "Browser.close"
+    assert process.terminate.call_count == int(needs_termination)
+    assert process.wait.call_count == 1 + int(needs_termination)
     profile.cleanup.assert_called_once()
+
+
+def test_password_proposal_is_masked_but_executor_receives_value(monkeypatch):
+    protocol, output, browser, bf, cf = setup_loop(monkeypatch)
+    browser.observe.return_value['actions'][0]['sensitive'] = True
+    result = run_task(request(), protocol, chrome_factory=cf, browser_factory=bf)
+    assert result['status'] == 'completed'
+    proposals = [json.loads(line) for line in output.getvalue().splitlines()
+                 if json.loads(line)['type'] == 'action_proposal']
+    assert proposals[-1]['text'] == '[redacted password]'
+    assert browser.act.call_args.kwargs['text'] == 'book'
+
+
+def test_verification_handoff_continues_same_browser(monkeypatch):
+    protocol, output, browser, bf, cf = setup_loop(monkeypatch, responses=(True,))
+    browser.observe.return_value['authenticationRequired'] = True
+    protocol.messages.put({'type': 'human_response', 'answer': '123456'})
+    protocol.messages.put({'type': 'action_response', 'id': '2', 'allow': True})
+    result = run_task(request(), protocol, chrome_factory=cf, browser_factory=bf)
+    assert result['status'] == 'completed'
+    assert cf.call_count == 1 and bf.call_count == 1
+    assert output.getvalue().count('"type": "human_required"') == 1
+    assert '123456' in loop.choose.call_args.args[1]

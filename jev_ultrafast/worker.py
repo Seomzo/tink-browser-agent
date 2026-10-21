@@ -18,6 +18,7 @@ from .worker_browser import OwnedChrome, chrome_binary
 PROTOCOL_VERSION = 1
 MAX_LINE_BYTES = 262144  # Accommodates JSON-escaped Unicode within the validated text/path limits.
 SUMMARIES = {
+    "human_input_unavailable": "Verification needs human input, but no response was received.",
     "model_done": "The browser model reported completion. Review the page evidence to verify the goal.",
     "model_blocked": "The browser model could not find a supported next action.",
     "no_progress": "The browser stopped after repeated actions without a visible change.",
@@ -131,6 +132,24 @@ class Protocol:
                 raise Stopped("denied", "approval_denied")
             return
 
+    def human_input(self, url):
+        # One bounded handoff per task. No model calls while the human is responding.
+        if self.deadline is not None:
+            self.deadline += 180
+        self.emit("human_required", url=url)
+        while True:
+            self.check()
+            try:
+                response = self.messages.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            if response.get("type") != "human_response":
+                raise Stopped("error", "invalid_response")
+            answer = response.get("answer")
+            if not isinstance(answer, str) or not answer.strip() or answer.lower() == "cancel":
+                raise Stopped("blocked", "human_input_unavailable")
+            return answer[:500]
+
     def read(self):
         while not self.finished.is_set():
             try:
@@ -191,6 +210,11 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
             protocol.emit("observation", **item)
 
     def before_action(action, page, text):
+        if action.get("sensitive") and text:
+            # Verify service credentials cannot be typed; mask only the login value in the proposal.
+            if any(secret in text for secret in protocol.secrets):
+                raise Stopped("denied", "credential_material")
+            text = "[redacted password]"
         protocol.approve(action["kind"], page["url"], action["label"], text=text,
                          fingerprint=page["fingerprint"])
 
@@ -205,8 +229,17 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
                                       before_action=before_action)
                 protocol.emit("started", browser="owned_chrome", persistent_session=False)
                 observe(agent.state["page"])
+                handoff_used = False
                 while True:
                     protocol.check()
+                    if agent.state["page"].get("authenticationRequired") and not handoff_used:
+                        handoff_used = True
+                        answer = protocol.human_input(agent.state["page"]["url"])
+                        agent.state["page"] = browser.observe(screenshot=False)
+                        observe(agent.state["page"])
+                        if answer.lower() != "continue":
+                            agent.state["goal"] += "\nUser-provided verification response: " + answer
+                        agent.state["status"] = "ready"
                     if len(agent.state["decisions"]) >= request["max_steps"] * 2:
                         raise Stopped("blocked", "decision_limit")
                     agent.command("predict")
