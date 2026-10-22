@@ -345,6 +345,56 @@ def test_missing_closed_and_recreated_target_are_reported(monkeypatch, live_sess
     assert not live_session.exists()
 
 
+@pytest.mark.parametrize('headless', [True, pytest.param(False, marks=pytest.mark.skipif(
+    sys.platform != 'darwin', reason='Headed last-window context unloading is a macOS regression',
+))])
+def test_all_windows_closed_can_resume_reopen_and_close(monkeypatch, live_session, fixture_url, headless):
+    from jev_ultrafast.worker_browser import OwnedChrome
+
+    monkeypatch.setenv('TINK_BROWSER_HEADLESS', '1' if headless else '0')
+    first = run_live_task(monkeypatch, fixture_url)
+    assert first['status'] == 'completed', first
+    original = json.loads(live_session.read_text())
+    live_evaluate("document.cookie='fixture_login=yes; max-age=3600; path=/'")
+
+    def close_all_windows():
+        with OwnedChrome(allow_launch=False) as chrome:
+            for target in chrome.call('Target.getTargets')['targetInfos']:
+                if target['type'] == 'page':
+                    chrome.call('Target.closeTarget', targetId=target['targetId'])
+            deadline = time.monotonic() + 10
+            while True:
+                targets = chrome.call('Target.getTargets')['targetInfos']
+                if not targets or (headless and not any(t['type'] == 'page' for t in targets)):
+                    break
+                assert time.monotonic() < deadline, targets
+                time.sleep(0.05)
+            assert chrome._owned_process_alive()
+
+    close_all_windows()
+    # No URL may neither open a new window nor silently navigate away from a closed tab.
+    resumed = run_live_task(monkeypatch)
+    assert resumed['stop_reason'] == 'browser_target_closed', resumed
+    assert resumed['usage']['decision_calls'] == 0
+    assert json.loads(live_session.read_text()) == original
+    with OwnedChrome(allow_launch=False) as chrome:
+        assert not any(t['type'] == 'page' for t in chrome.call('Target.getTargets')['targetInfos'])
+
+    reopened = run_live_task(monkeypatch, fixture_url)
+    assert reopened['status'] == 'completed', reopened
+    assert reopened['browser_session'] == first['browser_session'] and not reopened['session_reused']
+    current = json.loads(live_session.read_text())
+    assert current['pid'] == original['pid'] and current['target_id'] != original['target_id']
+    assert 'fixture_login=yes' in live_evaluate('document.cookie')
+    assert 'Ready' in reopened['evidence'][-1]['text']
+
+    close_all_windows()
+    closed = subprocess.run([sys.executable, '-m', 'jev_ultrafast.worker', '--close-browser'],
+                            capture_output=True, text=True, timeout=15)
+    assert json.loads(closed.stdout)['stop_reason'] == 'browser_closed', closed.stdout
+    assert not live_session.exists()
+
+
 @pytest.mark.parametrize('phase,stop', [('model', 'cancel'), ('approval', 'cancel'),
                                         ('model', 'kill'), ('approval', 'kill'), ('approval', 'deny'),
                                         ('model', 'timeout')])
