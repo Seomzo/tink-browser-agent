@@ -264,6 +264,33 @@ def test_watchdog_preserves_pending_approval_accounting(monkeypatch):
     kill.assert_not_called()  # The bounded queue poll unwinds and records its wait.
 
 
+def test_cancellation_at_approval_exit_cannot_execute_approved_action(monkeypatch):
+    protocol, _, browser, bf, cf = setup_loop(monkeypatch)
+    original_check = protocol.check
+    interrupted = False
+    kill = Mock()
+    monkeypatch.setattr('jev_ultrafast.worker.os.kill', kill)
+
+    def interleaved_check():
+        nonlocal interrupted
+        original_check()
+        # Simulate cancellation arriving after the approval response's last
+        # check, while the finally block still has to end the approval phase.
+        if (protocol.next_id == 2 and protocol.approval_started is not None
+                and protocol.messages.empty() and not interrupted):
+            interrupted = True
+            protocol.stop = Stopped('cancelled', 'cancelled')
+            protocol.watch()
+
+    monkeypatch.setattr(protocol, 'check', interleaved_check)
+    result = run_task(request(), protocol, chrome_factory=cf, browser_factory=bf)
+    assert interrupted
+    kill.assert_not_called()  # Watchdog leaves the bounded approval wait to unwind.
+    assert result['status'] == 'cancelled' and result['stop_reason'] == 'cancelled'
+    assert result['step_count'] == 0
+    browser.act.assert_not_called()
+
+
 @pytest.mark.parametrize('reason,status', [('approval_timeout', 'timeout'), (None, 'denied')])
 def test_host_approval_timeout_is_not_a_denial(monkeypatch, reason, status):
     protocol, _, browser, bf, cf = setup_loop(monkeypatch, responses=(True,))
