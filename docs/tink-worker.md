@@ -30,8 +30,13 @@ Every event includes `protocol_version: 1`. An action proposal contains an `id`,
 ```
 
 Denial ends the task. The host can send `{"type":"cancel"}` or terminate the
-owned process group. The worker also enforces a deadline during blocking model
-calls and approval waits. The host must start the worker with a new process group
+owned process group. Execution time pauses while awaiting action approval, with
+a separate cumulative 180-second approval allowance per task. Exhausting it
+returns `timeout` / `approval_timeout`, and a late response cannot execute input.
+The host can report the same outcome with an `action_response` containing
+`allow: false` and `stop_reason: "approval_timeout"`. Ordinary `allow: false`
+still means denial. The worker enforces deadlines during blocking model calls
+and approval waits. The host must start the worker with a new process group
 and reap that group on every exit path; it must never kill another browser. In
 disposable mode, set the child's `TMPDIR` to a host-owned temporary directory and
 remove it after reaping. In live-session mode Chrome launches in a separate
@@ -40,7 +45,11 @@ cannot kill its browser.
 
 The final result contains `status` (`completed`, `blocked`, `denied`, `cancelled`,
 `timeout`, or `error`), `stop_reason`, `summary`, `evidence`, `steps`, `step_count`,
-`final_url`, `elapsed_ms`, `usage`, and `outcome_verified: false`. Evidence is bounded
+`final_url`, `elapsed_ms`, `execution_ms`, `approval_wait_ms`, `approval_count`,
+`usage`, and `outcome_verified: false`. `execution_ms` excludes approval waiting;
+the existing bounded MFA handoff remains included. `approval_count` excludes the
+exact initial URL proposal automatically approved by Tink; its brief round-trip
+still counts toward waiting time. Evidence is bounded
 visible page text with a source URL/title, retained across observations. Completion
 is the model's stopping decision; the parent evaluates the evidence. Incomplete
 or interrupted model charges are labeled with `usage.cost_complete: false`.
@@ -54,14 +63,22 @@ never replayed.
 browser or making an API call. `--chrome-path /path/to/executable` overrides Chrome
 detection for that check; a start message can supply `chrome_path` for execution.
 The self-test's `persistent_session: true` advertises live-session support.
+`approval_wait_budget: true` and `popup_following: true` let hosts reject older
+workers before relying on separate approval timing or click-opened tabs.
 
 ## Sessions and supported scope
 
 Each task controls an owned Chrome tab. The host can retain the live browser
 between calls within its Tink profile; otherwise Chrome is disposable.
 Downloads are disabled. Explicit browser close flushes saved site data.
-This first release supports macOS and Linux. The existing DOM/control
-limitations still apply, including frames, shadow roots, popups and uploads.
+This release supports macOS and Linux. After an approved click, the worker can
+follow one newly opened page whose CDP opener is the controlled tab. It excludes
+preexisting and unrelated tabs, checks for up to one second, and gives a found
+tab 100 ms for siblings to appear before selecting it. Multiple matching tabs
+return `blocked` / `multiple_new_tabs`; no click is replayed. The original tab
+stays open and the new target becomes the profile's retained tab. Tabs opened
+after this bounded check, missing opener relationships, switching back, frames,
+shadow roots, and uploads remain unsupported.
 
 This is the attributed Jev fork with MIT notices preserved. It is not the original
 Tink rewrite, a locally trained model, a Laya speedup, or full computer control.
@@ -104,7 +121,8 @@ Empty initial pages get a bounded rendering wait. Before accepting BLOCKED, the
 worker waits briefly for a changed observation and re-plans if the page changed.
 It does not replay submitted actions. Live sessions and verification handoff are
 described below. CAPTCHA, frames, and
-popup-based SSO are not covered by password-field support.
+multi-window SSO are not covered by password-field support. Following an ordinary
+click-opened tab does not provide an SSO window-switching flow.
 
 Local desktop validation (2026-09-23): the patched worker filled the username,
 clicked Next, filled the password, and clicked Login on Tekion. Captured evidence
@@ -158,3 +176,9 @@ worker holds the same Chrome process and makes no model calls while waiting.
 Both host and worker deadlines receive a bounded 180-second handoff allowance.
 Missing callbacks, cancellation, EOF, and deadline expiry terminate the task.
 The flow does not configure email access or bypass CAPTCHA/MFA.
+
+Offline clock tests cover approval waits longer than the execution budget,
+cumulative allowance exhaustion, explicit denial, cancellation, and late approval.
+Owned-Chrome fixtures verify immediate and delayed child tabs, exclusion of old
+and unrelated tabs, one executed click, shared cookies, retained child-page memory,
+and follow-up tasks without navigation. These tests make no model API calls.

@@ -16,6 +16,7 @@ from .browser import Browser, StalePage
 from .worker_browser import OwnedChrome, chrome_binary
 
 PROTOCOL_VERSION = 1
+APPROVAL_ALLOWANCE_SECONDS = 180
 MAX_LINE_BYTES = 262144  # Accommodates JSON-escaped Unicode within the validated text/path limits.
 SUMMARIES = {
     "human_input_unavailable": "Verification needs human input, but no response was received.",
@@ -25,6 +26,7 @@ SUMMARIES = {
     "step_limit": "The browser reached its action limit. Partial evidence is available.",
     "decision_limit": "The browser reached its decision limit. Partial evidence is available.",
     "approval_denied": "A proposed browser action was denied. No further action was executed.",
+    "approval_timeout": "The browser task exhausted its approval waiting allowance. No pending action was executed.",
     "credential_material": "The worker refused to send a configured credential through a browser action.",
     "cancelled": "The browser task was cancelled.",
     "host_disconnected": "The supervising host disconnected.",
@@ -37,6 +39,7 @@ SUMMARIES = {
     "browser_profile_busy": "Another browser task owns this profile. Wait for it to finish or cancel it first.",
     "browser_session_unavailable": "The saved browser session could not be verified. No browser was attached.",
     "action_unavailable": "The same action was rejected three times without a page change. The page remains available.",
+    "multiple_new_tabs": "The click opened multiple browser tabs. No tab was selected; inspect them before continuing.",
     "browser_closed": "The live browser session is closed. Saved site data was retained.",
 }
 
@@ -90,6 +93,10 @@ class Protocol:
         self.finished = threading.Event()
         self.deadline = None
         self.next_id = 0
+        self.approval_started = None
+        self.approval_wait_seconds = 0.0
+        self.approval_count = 0
+        self.clock_lock = threading.Lock()
         self.secrets = [v for k, v in os.environ.items() if len(v) >= 8 and any(
             word in k.upper() for word in ("KEY", "TOKEN", "SECRET", "PASSWORD")
         )]
@@ -115,8 +122,13 @@ class Protocol:
     def check(self):
         if self.stop is not None:
             raise self.stop
-        if self.deadline is not None and time.monotonic() >= self.deadline:
-            raise Stopped("timeout", "deadline_exceeded")
+        with self.clock_lock:
+            now = time.monotonic()
+            if self.approval_started is not None:
+                if self.approval_wait_seconds + now - self.approval_started >= APPROVAL_ALLOWANCE_SECONDS:
+                    raise Stopped("timeout", "approval_timeout")
+            elif self.deadline is not None and now >= self.deadline:
+                raise Stopped("timeout", "deadline_exceeded")
 
     def approve(self, kind, url, label, *, text=None, fingerprint=None):
         self.check()
@@ -124,20 +136,36 @@ class Protocol:
             raise Stopped("denied", "credential_material")
         self.next_id += 1
         identifier = str(self.next_id)
-        self.emit("action_proposal", id=identifier, kind=kind, url=url, label=label,
-                  text=text, fingerprint=fingerprint)
-        while True:
+        if not (kind == "navigate" and fingerprint == "initial"):
+            self.approval_count += 1
+        with self.clock_lock:
+            self.approval_started = time.monotonic()
+        try:
             self.check()
-            try:
-                response = self.messages.get(timeout=0.1)
-            except queue.Empty:
-                continue
-            if (response.get("type") != "action_response" or response.get("id") != identifier
-                    or type(response.get("allow")) is not bool):
-                raise Stopped("error", "invalid_response")
-            if not response["allow"]:
-                raise Stopped("denied", "approval_denied")
-            return
+            self.emit("action_proposal", id=identifier, kind=kind, url=url, label=label,
+                      text=text, fingerprint=fingerprint)
+            while True:
+                self.check()
+                try:
+                    response = self.messages.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                self.check()  # A late approval cannot authorize input after cancellation or timeout.
+                if (response.get("type") != "action_response" or response.get("id") != identifier
+                        or type(response.get("allow")) is not bool):
+                    raise Stopped("error", "invalid_response")
+                if not response["allow"]:
+                    if response.get("stop_reason") == "approval_timeout":
+                        raise Stopped("timeout", "approval_timeout")
+                    raise Stopped("denied", "approval_denied")
+                return
+        finally:
+            with self.clock_lock:
+                waited = time.monotonic() - self.approval_started
+                if self.deadline is not None:
+                    self.deadline += waited
+                self.approval_wait_seconds += waited
+                self.approval_started = None
 
     def human_input(self, url):
         # One bounded handoff per task. No model calls while the human is responding.
@@ -179,7 +207,11 @@ class Protocol:
                 self.check()
             except Stopped as stopped:
                 self.stop = stopped
-                os.kill(os.getpid(), signal.SIGTERM)
+                with self.clock_lock:
+                    waiting_for_approval = self.approval_started is not None
+                # Approval reads poll every 100 ms; let their finally account for the wait.
+                if not waiting_for_approval:
+                    os.kill(os.getpid(), signal.SIGTERM)
                 return
 
 
@@ -238,7 +270,12 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
         if request["start_url"] is None:
             chrome_args["allow_launch"] = False
         with chrome_factory(**chrome_args) as chrome:
-            browser_args = {"transport": chrome.call}
+            def followed_target(target):
+                if persistent:
+                    chrome.retain_target(target)
+                chrome.call("Target.activateTarget", targetId=target)
+
+            browser_args = {"transport": chrome.call, "on_target_changed": followed_target}
             if persistent:
                 browser_session = chrome.session_data["browser_session"]
                 target = chrome.session_data.get("target_id")
@@ -322,7 +359,7 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
         status, reason = stopped.status, stopped.reason
     except RuntimeError as error:
         if str(error) in {"browser_session_missing", "browser_profile_busy", "browser_target_closed",
-                          "browser_session_unavailable"}:
+                          "browser_session_unavailable", "multiple_new_tabs"}:
             status, reason = "blocked", str(error)
     except Exception:
         # Browser/provider exceptions may include URLs, page text, or credentials.
@@ -334,12 +371,16 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
     usage = usage_summary(state)
     if status in {"error", "cancelled", "timeout"}:
         usage["cost_complete"] = False  # An interrupted/failed request may not have returned its usage.
+    elapsed_ms = round((time.monotonic() - started) * 1000)
+    approval_wait_ms = round(protocol.approval_wait_seconds * 1000)
     return {"status": status, "stop_reason": reason, "summary": SUMMARIES[reason], "evidence": evidence,
             "steps": steps, "step_count": len(steps), "usage": usage, "outcome_verified": False,
             "final_url": evidence[-1]["url"] if evidence else None,
-            "elapsed_ms": round((time.monotonic() - started) * 1000),
+            "elapsed_ms": elapsed_ms, "execution_ms": max(0, elapsed_ms - approval_wait_ms),
             "persistent_session": persistent, "session_reused": session_reused,
-            "browser_session": browser_session, "rejected_decisions": rejected_decisions}
+            "browser_session": browser_session, "rejected_decisions": rejected_decisions,
+            "approval_count": protocol.approval_count,
+            "approval_wait_ms": approval_wait_ms}
 
 
 def main():
@@ -356,7 +397,8 @@ def main():
             binary = None
         protocol.emit("self_test", worker="tink_browser", version="1", available=True, ready=True,
                       chrome_available=binary is not None, chrome_path=binary,
-                      platform_supported=sys.platform != "win32", supervised_actions=True, persistent_session=True)
+                      platform_supported=sys.platform != "win32", supervised_actions=True, persistent_session=True,
+                      approval_wait_budget=True, popup_following=True)
         return
     if args.close_browser:
         status, reason = "completed", "browser_closed"
