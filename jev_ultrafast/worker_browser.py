@@ -226,7 +226,14 @@ class OwnedChrome:
             raise RuntimeError("browser_session_unavailable")
         self.socket = connect(endpoint, proxy=None, open_timeout=3, close_timeout=1, max_size=8 * 1024 * 1024)
         self.call("Browser.getVersion")
-        self.call("Browser.setDownloadBehavior", behavior="deny")
+        has_page = any(target["type"] == "page" for target in self.call("Target.getTargets")["targetInfos"])
+        # macOS can keep CDP alive after the last window's browser context unloads.
+        # Restore only an inert window before configuring downloads or navigating.
+        if not has_page and self.allow_launch:
+            self.call("Target.createTarget", url="about:blank", newWindow=True, background=True)
+        if has_page or self.allow_launch:
+            self.call("Browser.setDownloadBehavior", behavior="deny")
+        # Without a page, resume reports the closed target; explicit close still works.
         self.session_data["endpoint"] = endpoint
         self._save_session()
 

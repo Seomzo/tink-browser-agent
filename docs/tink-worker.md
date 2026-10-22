@@ -135,7 +135,11 @@ explicitly closed or the user quits Chrome. Site sessions can still expire.
 
 Resume without a live browser returns `browser_session_missing`; a user-closed
 tab returns `browser_target_closed`. Supplying a URL can start a new browser or
-tab, with `session_reused: false`. Unverifiable metadata fails closed with
+tab, with `session_reused: false`. On macOS, closing every window can leave Chrome
+running with its browser context unloaded. A supplied URL reopens a blank window
+in that same process and saved profile, restores the download policy, then
+navigates. Resuming without a URL and explicitly closing the browser still work
+in this empty-window state. Unverifiable metadata fails closed with
 `browser_session_unavailable`. A blocked result does not promise the goal was
 achieved. The caller must inspect evidence and decide whether to resume.
 

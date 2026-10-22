@@ -393,6 +393,62 @@ def test_persistent_endpoint_must_match_owned_profile_metadata(monkeypatch, tmp_
     connect.assert_not_called()
 
 
+@pytest.mark.parametrize('allow_launch,has_page', [(True, False), (False, False), (True, True), (False, True)])
+def test_persistent_reconnect_after_last_window_closed(monkeypatch, tmp_path, allow_launch, has_page):
+    chrome = OwnedChrome(allow_launch=allow_launch)
+    chrome.profile_dir = chrome.session_dir = tmp_path
+    chrome.session_data = {'target_id': 'closed-tab'}
+    (tmp_path / 'DevToolsActivePort').write_text('12345\n/devtools/browser/owned\n')
+    monkeypatch.setattr('jev_ultrafast.worker_browser.connect', Mock())
+    pages = [{'type': 'page', 'targetId': 'open-tab'}] if has_page else []
+
+    def respond(method, **params):
+        if method == 'Target.getTargets':
+            return {'targetInfos': list(pages)}
+        if method == 'Target.createTarget':
+            assert params == {'url': 'about:blank', 'newWindow': True, 'background': True}
+            pages.append({'type': 'page', 'targetId': 'new-blank-tab'})
+            return {'targetId': 'new-blank-tab'}
+        if method == 'Browser.setDownloadBehavior':
+            # macOS can keep Chrome/CDP alive after unloading the last profile context.
+            if not pages:
+                raise RuntimeError('browser_request_failed')
+            assert params == {'behavior': 'deny'}
+        return {}
+
+    chrome.call = Mock(side_effect=respond)
+    chrome._connect_persistent()
+    methods = [call.args[0] for call in chrome.call.call_args_list]
+    assert methods.count('Target.createTarget') == int(allow_launch and not has_page)
+    assert methods.count('Browser.setDownloadBehavior') == int(allow_launch or has_page)
+    if allow_launch and not has_page:
+        assert methods.index('Target.createTarget') < methods.index('Browser.setDownloadBehavior')
+    # Reopening a window must not misreport the previous controlled tab as reused.
+    assert chrome.session_data['target_id'] == 'closed-tab'
+    assert json.loads((tmp_path / 'session.json').read_text()) == chrome.session_data
+
+
+def test_reconnected_browser_requires_download_policy(monkeypatch, tmp_path):
+    chrome = OwnedChrome()
+    chrome.profile_dir = chrome.session_dir = tmp_path
+    (tmp_path / 'DevToolsActivePort').write_text('12345\n/devtools/browser/owned\n')
+    monkeypatch.setattr('jev_ultrafast.worker_browser.connect', Mock())
+
+    def respond(method, **_params):
+        if method == 'Target.getTargets':
+            return {'targetInfos': []}
+        if method == 'Target.createTarget':
+            return {'targetId': 'new-blank-tab'}
+        if method == 'Browser.setDownloadBehavior':
+            raise RuntimeError('browser_request_failed')
+        return {}
+
+    chrome.call = Mock(side_effect=respond)
+    with pytest.raises(RuntimeError, match='browser_request_failed'):
+        chrome._connect_persistent()
+    assert not (tmp_path / 'session.json').exists()
+
+
 def test_unpublished_launch_is_reaped_after_interruption(monkeypatch, tmp_path):
     monkeypatch.setenv('TINK_BROWSER_SESSION_DIR', str(tmp_path / 'session'))
     monkeypatch.setattr('jev_ultrafast.worker_browser.chrome_binary', lambda _=None: '/owned/chrome')
