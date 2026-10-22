@@ -158,7 +158,7 @@ class Protocol:
                     if response.get("stop_reason") == "approval_timeout":
                         raise Stopped("timeout", "approval_timeout")
                     raise Stopped("denied", "approval_denied")
-                return
+                break
         finally:
             with self.clock_lock:
                 waited = time.monotonic() - self.approval_started
@@ -166,6 +166,9 @@ class Protocol:
                     self.deadline += waited
                 self.approval_wait_seconds += waited
                 self.approval_started = None
+        # The watchdog can record cancellation while leaving this wait to unwind.
+        # Recheck after that handoff so a just-approved mutation cannot escape it.
+        self.check()
 
     def human_input(self, url):
         # One bounded handoff per task. No model calls while the human is responding.
