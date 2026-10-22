@@ -30,16 +30,18 @@ class StalePage(ValueError):
 
 
 class Browser:
-    def __init__(self, url, *, transport=None):
+    def __init__(self, url, *, transport=None, target=None, owns_target=True):
         if transport is None:
             ensure_daemon()
         self._cdp = transport or cdp
-        self.target = self._cdp("Target.createTarget", url="about:blank", background=True)["targetId"]
+        self.owns_target = owns_target
+        self.target = target or self._cdp("Target.createTarget", url="about:blank", background=True)["targetId"]
         self.session = self._cdp("Target.attachToTarget", targetId=self.target, flatten=True)["sessionId"]
         self.call("Emulation.setDeviceMetricsOverride", width=1120, height=780, deviceScaleFactor=1, mobile=False)
         # Keep rAF/menus rendering in an owned background tab, without activating the user's Chrome tab.
         self.call("Emulation.setFocusEmulationEnabled", enabled=True)
-        self.call("Page.navigate", url=url)
+        if url is not None:
+            self.call("Page.navigate", url=url)
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             if self.evaluate("document.readyState") == "complete":
@@ -140,7 +142,10 @@ class Browser:
 
     def close(self):
         if self.target:
-            self._cdp("Target.closeTarget", targetId=self.target)
+            if self.owns_target:
+                self._cdp("Target.closeTarget", targetId=self.target)
+            else:
+                self._cdp("Target.detachFromTarget", sessionId=self.session)
             self.target = None
 
 

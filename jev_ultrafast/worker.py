@@ -32,6 +32,12 @@ SUMMARIES = {
     "invalid_request": "The browser request did not match protocol version 1.",
     "invalid_response": "The host returned an invalid action approval.",
     "worker_error": "The browser worker failed. Review partial evidence before retrying.",
+    "browser_session_missing": "No live browser session exists. Supply a starting URL to open one.",
+    "browser_target_closed": "The retained browser tab was closed. Supply a starting URL to open a new tab.",
+    "browser_profile_busy": "Another browser task owns this profile. Wait for it to finish or cancel it first.",
+    "browser_session_unavailable": "The saved browser session could not be verified. No browser was attached.",
+    "action_unavailable": "The same action was rejected three times without a page change. The page remains available.",
+    "browser_closed": "The live browser session is closed. Saved site data was retained.",
 }
 
 
@@ -46,11 +52,12 @@ def validate_request(request):
     goal, url = request.get("goal"), request.get("start_url")
     if not isinstance(goal, str) or not goal.strip() or len(goal) > 12000:
         raise ValueError("invalid_request")
-    if not isinstance(url, str) or len(url) > 4096:
-        raise ValueError("invalid_request")
-    parsed = urlsplit(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
-        raise ValueError("invalid_request")
+    if url is not None:
+        if not isinstance(url, str) or len(url) > 4096:
+            raise ValueError("invalid_request")
+        parsed = urlsplit(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("invalid_request")
     steps, timeout = request.get("max_steps", 20), request.get("timeout_seconds", 120)
     chrome_path = request.get("chrome_path")
     if chrome_path is not None and (not isinstance(chrome_path, str) or len(chrome_path) > 4096):
@@ -199,6 +206,9 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
     evidence, steps, seen = [], [], set()
     agent = None
     status, reason = "error", "worker_error"
+    persistent = bool(os.environ.get("TINK_BROWSER_SESSION_DIR"))
+    session_reused, browser_session = False, None
+    rejected_decisions, repeated_rejections, rejection_key = 0, 0, None
 
     def observe(page):
         key = (page.get("url"), page.get("fingerprint"))
@@ -219,15 +229,35 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
                          fingerprint=page["fingerprint"])
 
     try:
-        protocol.approve("navigate", request["start_url"], "Open the requested starting page", fingerprint="initial")
-        with chrome_factory(binary=request.get("chrome_path")) as chrome:
-            browser = browser_factory(request["start_url"], transport=chrome.call)
+        if request["start_url"] is not None:
+            protocol.approve("navigate", request["start_url"], "Open the requested starting page",
+                             fingerprint="initial")
+        elif not persistent:
+            raise Stopped("blocked", "browser_session_missing")
+        chrome_args = {"binary": request.get("chrome_path")}
+        if request["start_url"] is None:
+            chrome_args["allow_launch"] = False
+        with chrome_factory(**chrome_args) as chrome:
+            browser_args = {"transport": chrome.call}
+            if persistent:
+                browser_session = chrome.session_data["browser_session"]
+                target = chrome.session_data.get("target_id")
+                targets = chrome.call("Target.getTargets")["targetInfos"]
+                session_reused = any(t["targetId"] == target and t["type"] == "page" for t in targets)
+                if not session_reused:
+                    if request["start_url"] is None:
+                        raise Stopped("blocked", "browser_target_closed")
+                    target = chrome.call("Target.createTarget", url="about:blank", background=True)["targetId"]
+                    chrome.retain_target(target)
+                browser_args.update(target=target, owns_target=False)
+            browser = browser_factory(request["start_url"], **browser_args)
             try:
-                # Activate only this disposable browser's owned target; never a personal Chrome tab.
+                # Activate only this Tink browser's owned target; never a personal Chrome tab.
                 chrome.call("Target.activateTarget", targetId=browser.target)
                 agent = agent_factory(request["start_url"], request["goal"], browser=browser,
                                       before_action=before_action)
-                protocol.emit("started", browser="owned_chrome", persistent_session=False)
+                protocol.emit("started", browser="owned_chrome", persistent_session=persistent,
+                              session_reused=session_reused, browser_session=browser_session)
                 observe(agent.state["page"])
                 handoff_used = False
                 while True:
@@ -248,11 +278,24 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
                             and agent.state["decision"]["choice"] not in {"DONE", "BLOCKED"}):
                         raise Stopped("blocked", "step_limit")
                     selected = agent.state["decision"]["choice"]
+                    previous_actions = len(agent.state["history"])
                     try:
                         agent.command("act", {"fingerprint": agent.state["page"]["fingerprint"]})
+                        repeated_rejections, rejection_key = 0, None
                     except StalePage:
                         agent.state["page"] = browser.observe(screenshot=False)
                         agent.state["status"] = "ready"
+                        # A stale observation after executed input is not a rejected action.
+                        if len(agent.state["history"]) == previous_actions:
+                            rejected_decisions += 1
+                            key = (agent.state["page"]["fingerprint"], selected)
+                            repeated_rejections = repeated_rejections + 1 if key == rejection_key else 1
+                            rejection_key = key
+                            if repeated_rejections >= 3:
+                                observe(agent.state["page"])
+                                raise Stopped("blocked", "action_unavailable")
+                        else:
+                            repeated_rejections, rejection_key = 0, None
                     # An executed action stays recorded even if the following observation was stale.
                     for action in agent.state["history"][len(steps):]:
                         step = {"step": action["step"], "kind": action["kind"], "label": action["action"],
@@ -273,10 +316,14 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
                     browser.close()
                 except Exception:
                     # A vanished CDP target must not replace cancellation or the recorded outcome.
-                    # OwnedChrome still terminates the entire disposable browser in its exit handler.
+                    # Persistent tasks detach; disposable tasks close their owned browser.
                     pass
     except Stopped as stopped:
         status, reason = stopped.status, stopped.reason
+    except RuntimeError as error:
+        if str(error) in {"browser_session_missing", "browser_profile_busy", "browser_target_closed",
+                          "browser_session_unavailable"}:
+            status, reason = "blocked", str(error)
     except Exception:
         # Browser/provider exceptions may include URLs, page text, or credentials.
         status, reason = "error", "worker_error"
@@ -290,13 +337,16 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
     return {"status": status, "stop_reason": reason, "summary": SUMMARIES[reason], "evidence": evidence,
             "steps": steps, "step_count": len(steps), "usage": usage, "outcome_verified": False,
             "final_url": evidence[-1]["url"] if evidence else None,
-            "elapsed_ms": round((time.monotonic() - started) * 1000)}
+            "elapsed_ms": round((time.monotonic() - started) * 1000),
+            "persistent_session": persistent, "session_reused": session_reused,
+            "browser_session": browser_session, "rejected_decisions": rejected_decisions}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--chrome-path")
+    parser.add_argument("--close-browser", action="store_true")
     args = parser.parse_args()
     protocol = Protocol(sys.stdin, sys.stdout)
     if args.self_test:
@@ -306,7 +356,22 @@ def main():
             binary = None
         protocol.emit("self_test", worker="tink_browser", version="1", available=True, ready=True,
                       chrome_available=binary is not None, chrome_path=binary,
-                      platform_supported=sys.platform != "win32", supervised_actions=True)
+                      platform_supported=sys.platform != "win32", supervised_actions=True, persistent_session=True)
+        return
+    if args.close_browser:
+        status, reason = "completed", "browser_closed"
+        try:
+            if os.environ.get("TINK_BROWSER_SESSION_DIR"):
+                with OwnedChrome(binary=args.chrome_path, allow_launch=False) as chrome:
+                    chrome.shutdown()
+        except RuntimeError as error:
+            if str(error) != "browser_session_missing":
+                status, reason = "blocked", str(error) if str(error) in SUMMARIES else "worker_error"
+        except Exception:
+            status, reason = "error", "worker_error"
+        protocol.emit("result", status=status, stop_reason=reason, summary=SUMMARIES[reason],
+                      persistent_session=True, session_reused=False, outcome_verified=False,
+                      evidence=[], steps=[], step_count=0, usage=usage_summary({}), rejected_decisions=0)
         return
     try:
         request = validate_request(read_message(sys.stdin))
