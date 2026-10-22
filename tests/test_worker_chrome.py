@@ -395,6 +395,117 @@ def test_all_windows_closed_can_resume_reopen_and_close(monkeypatch, live_sessio
     assert not live_session.exists()
 
 
+@pytest.fixture
+def popup_url():
+    class Popup(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path.startswith('/tickets'):
+                body = b'<title>Tickets</title><h1>Ticket options</h1><p>General admission available</p>'
+            elif self.path.startswith('/source'):
+                delay = 300 if 'delayed' in self.path else 0
+                body = (f'''<!doctype html><title>Festival</title><h1>Festival</h1>
+                    <button onclick="window.clicks=(window.clicks||0)+1;
+                      setTimeout(()=>window.open('/tickets','_blank'),{delay})">Buy Passes</button>''').encode()
+            else:
+                body = b'<title>Unrelated</title><h1>Unrelated tab</h1>'
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html')
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Popup)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield f'http://127.0.0.1:{server.server_port}'
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize('delay', ['', '?delayed'])
+def test_click_follows_owned_popup_and_next_task_resumes_it(monkeypatch, live_session, popup_url, delay):
+    from jev_ultrafast.browser import Browser
+    from jev_ultrafast.worker_browser import OwnedChrome
+
+    first = run_live_task(monkeypatch, popup_url + '/source' + delay)
+    assert first['status'] == 'completed', first
+    original = json.loads(live_session.read_text())
+    with OwnedChrome(allow_launch=False) as chrome:
+        browser = Browser(None, transport=chrome.call, target=original['target_id'], owns_target=False)
+        try:
+            browser.evaluate("document.cookie='fixture_login=yes; path=/'")
+            browser.call('Runtime.evaluate', expression="window.open('/old-child','_blank')", userGesture=True)
+            chrome.call('Target.createTarget', url=popup_url + '/unrelated', background=True)
+            existing = {t['targetId'] for t in chrome.call('Target.getTargets')['targetInfos']}
+        finally:
+            browser.close()
+
+    def choose(page, *_args, **_kwargs):
+        if 'Ticket options' in page['text']:
+            return live_decision('DONE')
+        target = next(a for a in page['actions'] if a['kind'] == 'click' and a['label'] == 'Buy Passes')
+        return live_decision(target['id'])
+
+    monkeypatch.setattr(agent, 'choose', choose)
+    protocol = Protocol(io.StringIO(), io.StringIO())
+    protocol.messages.put({'type': 'action_response', 'id': '1', 'allow': True})
+    opened = run_task(validate_request({'type': 'start', 'protocol_version': 1,
+                                       'goal': 'Open ticket options', 'start_url': None}), protocol)
+    assert opened['status'] == 'completed' and opened['step_count'] == 1, opened
+    assert 'Ticket options' in opened['evidence'][-1]['text']
+    current = json.loads(live_session.read_text())
+    assert current['pid'] == original['pid'] and current['browser_session'] == original['browser_session']
+    assert current['target_id'] not in existing
+    assert 'fixture_login=yes' in live_evaluate('document.cookie')
+    live_evaluate("window.popupMemory=42;sessionStorage.setItem('ticket','retained')")
+    with OwnedChrome(allow_launch=False) as chrome:
+        target = next(t for t in chrome.call('Target.getTargets')['targetInfos']
+                      if t['targetId'] == current['target_id'])
+        assert target['openerId'] == original['target_id']
+        browser = Browser(None, transport=chrome.call, target=original['target_id'], owns_target=False)
+        try:
+            assert browser.evaluate('window.clicks') == 1
+        finally:
+            browser.close()
+    resumed = run_live_task(monkeypatch)
+    assert resumed['status'] == 'completed' and resumed['session_reused'], resumed
+    assert 'Ticket options' in resumed['evidence'][-1]['text']
+    assert live_evaluate("[window.popupMemory,sessionStorage.getItem('ticket')]") == [42, 'retained']
+
+
+@pytest.mark.parametrize('stop', ['deny', 'cancel'])
+def test_denied_or_cancelled_popup_click_never_opens_child(monkeypatch, live_session, popup_url, stop):
+    from jev_ultrafast.worker import Stopped
+    from jev_ultrafast.worker_browser import OwnedChrome
+
+    assert run_live_task(monkeypatch, popup_url + '/source')['status'] == 'completed'
+    original = json.loads(live_session.read_text())
+
+    def choose(page, *_args, **_kwargs):
+        return live_decision(next(a['id'] for a in page['actions'] if a['label'] == 'Buy Passes'))
+
+    monkeypatch.setattr(agent, 'choose', choose)
+    protocol = Protocol(io.StringIO(), io.StringIO())
+    if stop == 'deny':
+        protocol.messages.put({'type': 'action_response', 'id': '1', 'allow': False})
+    else:
+        def cancelled(**_kwargs):
+            protocol.stop = Stopped('cancelled', 'cancelled')
+            return {'type': 'action_response', 'id': '1', 'allow': True}
+        protocol.messages.get = cancelled
+    result = run_task(validate_request({'type': 'start', 'protocol_version': 1,
+                                       'goal': 'Open ticket options', 'start_url': None}), protocol)
+    assert result['status'] == ('denied' if stop == 'deny' else 'cancelled') and result['step_count'] == 0
+    assert json.loads(live_session.read_text()) == original
+    with OwnedChrome(allow_launch=False) as chrome:
+        assert not any(t.get('openerId') == original['target_id']
+                       for t in chrome.call('Target.getTargets')['targetInfos'])
+    assert live_evaluate('window.clicks || 0') == 0
+
+
 @pytest.mark.parametrize('phase,stop', [('model', 'cancel'), ('approval', 'cancel'),
                                         ('model', 'kill'), ('approval', 'kill'), ('approval', 'deny'),
                                         ('model', 'timeout')])

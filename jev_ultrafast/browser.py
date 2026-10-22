@@ -30,22 +30,55 @@ class StalePage(ValueError):
 
 
 class Browser:
-    def __init__(self, url, *, transport=None, target=None, owns_target=True):
+    def __init__(self, url, *, transport=None, target=None, owns_target=True, on_target_changed=None):
         if transport is None:
             ensure_daemon()
         self._cdp = transport or cdp
         self.owns_target = owns_target
-        self.target = target or self._cdp("Target.createTarget", url="about:blank", background=True)["targetId"]
-        self.session = self._cdp("Target.attachToTarget", targetId=self.target, flatten=True)["sessionId"]
-        self.call("Emulation.setDeviceMetricsOverride", width=1120, height=780, deviceScaleFactor=1, mobile=False)
-        # Keep rAF/menus rendering in an owned background tab, without activating the user's Chrome tab.
-        self.call("Emulation.setFocusEmulationEnabled", enabled=True)
+        self.on_target_changed = on_target_changed
+        self.pending_tabs = None
+        self._attach(target or self._cdp("Target.createTarget", url="about:blank", background=True)["targetId"])
         if url is not None:
             self.call("Page.navigate", url=url)
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             if self.evaluate("document.readyState") == "complete":
                 break
+            time.sleep(0.02)
+
+    def _attach(self, target):
+        self.target = target
+        self.session = self._cdp("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
+        self.call("Emulation.setDeviceMetricsOverride", width=1120, height=780, deviceScaleFactor=1, mobile=False)
+        self.call("Emulation.setFocusEmulationEnabled", enabled=True)
+
+    def _follow_new_tab(self):
+        pending, self.pending_tabs = self.pending_tabs, None
+        if pending is None:
+            return
+        opener, previous, deadline = pending
+        first_seen = None
+        while True:
+            candidates = [target for target in self._cdp("Target.getTargets")["targetInfos"]
+                          if target["type"] == "page" and target.get("openerId") == opener
+                          and target["targetId"] not in previous]
+            if len(candidates) > 1:
+                raise RuntimeError("multiple_new_tabs")
+            now = time.monotonic()
+            if candidates:
+                first_seen = first_seen if first_seen is not None else now
+                # Give sibling tabs from the same click a short chance to appear before choosing.
+                if now - first_seen >= 0.1 or now >= deadline:
+                    previous_session = self.session
+                    self._attach(candidates[0]["targetId"])
+                    self.on_target_changed(self.target)
+                    self._cdp("Target.detachFromTarget", sessionId=previous_session)
+                    self.after_input = None
+                    return
+            else:
+                first_seen = None
+            if now >= deadline:
+                return
             time.sleep(0.02)
 
     def call(self, method, **params):
@@ -58,6 +91,8 @@ class Browser:
         return response.get("result", {}).get("value")
 
     def observe(self, screenshot=True):
+        # Agent records the executed click before this read-only target discovery.
+        self._follow_new_tab()
         if getattr(self, "after_input", None):
             action, self.after_input = self.after_input, None
             # This is read-only and happens after execution was logged, even if navigation interrupts it.
@@ -134,10 +169,15 @@ class Browser:
             raise StalePage("Page changed since this decision. Observe again.")
         if action["kind"] == "wait":
             time.sleep(0.1)
+        previous = None
+        if action["kind"] == "click" and self.on_target_changed is not None:
+            previous = {target["targetId"] for target in self._cdp("Target.getTargets")["targetInfos"]}
         result = browser_operation(
             {"operation": "act", "session": self.session, "action": action, "text": text}, transport=self._cdp
         )
         self.after_input = action if action["kind"] != "wait" else None
+        if previous is not None:
+            self.pending_tabs = (self.target, previous, time.monotonic() + 1)
         return result
 
     def close(self):

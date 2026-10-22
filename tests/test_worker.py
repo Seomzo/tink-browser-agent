@@ -3,9 +3,11 @@
 import io
 import json
 import os
+import queue
 import subprocess
 import sys
 from copy import deepcopy
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -187,6 +189,128 @@ def test_protocol_rejects_wrong_approval_id_and_denies_by_default():
     assert failure.value.reason == "invalid_response"
 
 
+def test_approval_wait_preserves_execution_budget_and_reports_wait(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr('jev_ultrafast.worker.time', SimpleNamespace(monotonic=lambda: now[0]))
+    protocol = Protocol(io.StringIO(), io.StringIO())
+    protocol.deadline = 110
+
+    def respond(**_kwargs):
+        now[0] = 115  # Human approval took longer than the entire execution budget.
+        protocol.check()
+        return {'type': 'action_response', 'id': '1', 'allow': True}
+
+    protocol.messages.get = respond
+    protocol.approve('click', 'https://example.test', 'Open tickets')
+    assert protocol.deadline == 125 and protocol.approval_wait_seconds == 15
+    assert protocol.approval_count == 1 and protocol.approval_started is None
+    now[0] = 124
+    protocol.check()
+    now[0] = 125
+    with pytest.raises(Stopped) as failure:
+        protocol.check()
+    assert failure.value.reason == 'deadline_exceeded'
+
+
+def test_approval_allowance_is_cumulative_and_rejects_a_late_allow(monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr('jev_ultrafast.worker.time', SimpleNamespace(monotonic=lambda: now[0]))
+    protocol = Protocol(io.StringIO(), io.StringIO())
+    protocol.deadline = 10
+
+    def respond(**_kwargs):
+        now[0] += 100
+        return {'type': 'action_response', 'id': str(protocol.next_id), 'allow': True}
+
+    protocol.messages.get = respond
+    protocol.approve('click', 'https://example.test', 'First')
+    with pytest.raises(Stopped) as failure:
+        protocol.approve('click', 'https://example.test', 'Second')
+    assert (failure.value.status, failure.value.reason) == ('timeout', 'approval_timeout')
+    assert protocol.approval_wait_seconds == 200 and protocol.approval_count == 2
+    assert protocol.approval_started is None
+
+
+def test_worker_bounds_unanswered_approval_and_cancellation_wins(monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr('jev_ultrafast.worker.time', SimpleNamespace(monotonic=lambda: now[0]))
+    protocol = Protocol(io.StringIO(), io.StringIO())
+    protocol.deadline = 10
+
+    def unanswered(**_kwargs):
+        now[0] = 180
+        raise queue.Empty()
+
+    protocol.messages.get = unanswered
+    with pytest.raises(Stopped) as failure:
+        protocol.approve('click', 'https://example.test', 'Submit')
+    assert failure.value.reason == 'approval_timeout'
+    protocol.stop = Stopped('cancelled', 'cancelled')
+    with pytest.raises(Stopped) as cancelled:
+        protocol.approve('click', 'https://example.test', 'Submit')
+    assert cancelled.value.reason == 'cancelled'
+
+
+def test_watchdog_preserves_pending_approval_accounting(monkeypatch):
+    monkeypatch.setattr('jev_ultrafast.worker.time', SimpleNamespace(monotonic=lambda: 200))
+    protocol = Protocol(io.StringIO(), io.StringIO())
+    protocol.deadline = 10
+    protocol.approval_started = 0
+    protocol.finished = Mock(wait=Mock(return_value=False))
+    kill = Mock()
+    monkeypatch.setattr('jev_ultrafast.worker.os.kill', kill)
+    protocol.watch()
+    assert protocol.stop.reason == 'approval_timeout'
+    kill.assert_not_called()  # The bounded queue poll unwinds and records its wait.
+
+
+@pytest.mark.parametrize('reason,status', [('approval_timeout', 'timeout'), (None, 'denied')])
+def test_host_approval_timeout_is_not_a_denial(monkeypatch, reason, status):
+    protocol, _, browser, bf, cf = setup_loop(monkeypatch, responses=(True,))
+    protocol.messages.put({'type': 'action_response', 'id': '2', 'allow': False, 'stop_reason': reason})
+    result = run_task(request(), protocol, chrome_factory=cf, browser_factory=bf)
+    assert result['status'] == status
+    assert result['stop_reason'] == (reason or 'approval_denied')
+    assert result['approval_count'] == 1  # Exact initial navigation is auto-approved by Tink.
+    assert result['elapsed_ms'] >= result['execution_ms'] >= 0
+    assert result['approval_wait_ms'] >= 0
+    browser.act.assert_not_called()
+
+
+def test_multiple_new_tabs_preserves_submitted_click(monkeypatch):
+    protocol, _, browser, bf, cf = setup_loop(monkeypatch)
+    browser.observe.side_effect = [page(), RuntimeError('multiple_new_tabs')]
+    result = run_task(request(), protocol, chrome_factory=cf, browser_factory=bf)
+    assert result['status'] == 'blocked' and result['stop_reason'] == 'multiple_new_tabs'
+    assert result['step_count'] == 1 and browser.act.call_count == 1
+
+
+def test_followed_target_is_saved_and_activated_only_after_observation(monkeypatch):
+    monkeypatch.setenv('TINK_BROWSER_SESSION_DIR', '/owned/session')
+    protocol, _, browser, bf, cf = setup_loop(monkeypatch)
+    chrome = cf.return_value
+    chrome.session_data = {'browser_session': 'owned', 'target_id': 'source'}
+    chrome.call.return_value = {'targetInfos': [{'targetId': 'source', 'type': 'page'}]}
+
+    def after_click():
+        assert browser.act.call_count == 1
+        bf.call_args.kwargs['on_target_changed']('opened-child')
+        return page()
+
+    calls = [0]
+
+    def observe(**_kwargs):
+        calls[0] += 1
+        return after_click() if calls[0] == 2 else page()
+
+    browser.observe.side_effect = observe
+    result = run_task(request(), protocol, chrome_factory=cf, browser_factory=bf)
+    assert result['status'] == 'completed'
+    chrome.retain_target.assert_called_once_with('opened-child')
+    assert any(call.args == ('Target.activateTarget',) and call.kwargs == {'targetId': 'opened-child'}
+               for call in chrome.call.call_args_list)
+
+
 def test_protocol_redacts_known_credentials_before_encoding(monkeypatch):
     secret = 'test-secret-"quoted"'
     monkeypatch.setenv("OPENROUTER_API_KEY", secret)
@@ -252,6 +376,7 @@ def test_self_test_is_offline_and_accepts_custom_chrome_path(tmp_path):
     assert report["protocol_version"] == 1 and report["ready"] is True
     assert report["chrome_available"] is False
     assert report["chrome_path"] is None
+    assert report["approval_wait_budget"] is True and report["popup_following"] is True
 
 
 def test_worker_import_does_not_load_harness_or_its_workspace_env():
