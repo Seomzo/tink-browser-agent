@@ -24,6 +24,12 @@ from jev_ultrafast.worker import (
 from jev_ultrafast.worker_browser import OwnedChrome
 
 
+@pytest.fixture(autouse=True)
+def isolated_session_environment(monkeypatch):
+    monkeypatch.delenv("TINK_BROWSER_SESSION_DIR", raising=False)
+    monkeypatch.delenv("TINK_BROWSER_PROFILE_DIR", raising=False)
+
+
 def request(**overrides):
     return validate_request({"type": "start", "protocol_version": 1, "goal": "Search for a book",
                              "start_url": "https://example.test/", **overrides})
@@ -77,6 +83,35 @@ def test_initial_navigation_denied_before_chrome(monkeypatch):
     assert result["evidence"] == [] and result["steps"] == []
     chrome_factory.assert_not_called()
     browser.act.assert_not_called()
+
+
+def test_resume_requires_live_session_without_launch(monkeypatch):
+    protocol, _, _, bf, cf = setup_loop(monkeypatch)
+    result = run_task(request(start_url=None), protocol, chrome_factory=cf, browser_factory=bf)
+    assert result["stop_reason"] == "browser_session_missing"
+    cf.assert_not_called()
+
+
+def test_unchanged_rejected_action_stops_without_spending_step_budget(monkeypatch):
+    protocol, _, browser, bf, cf = setup_loop(
+        monkeypatch, choices=("e1", "e1", "e1"), responses=(True, True, True, True)
+    )
+    browser.act.side_effect = StalePage("Covered target")
+    result = run_task(request(), protocol, chrome_factory=cf, browser_factory=bf)
+    assert result["status"] == "blocked"
+    assert result["stop_reason"] == "action_unavailable"
+    assert result["rejected_decisions"] == 3 and result["step_count"] == 0
+    assert loop.choose.call_count == 3
+
+
+def test_agent_does_not_own_injected_browser():
+    browser = Mock(observe=Mock(return_value=page()))
+    loop.Agent("https://example.test", "Read", browser=browser).close()
+    browser.close.assert_not_called()
+    browser.observe.side_effect = RuntimeError("Observation failed")
+    with pytest.raises(RuntimeError):
+        loop.Agent("https://example.test", "Read", browser=browser)
+    browser.close.assert_not_called()
 
 
 def test_fill_approval_contains_generated_text_before_mutation(monkeypatch):
@@ -298,3 +333,75 @@ def test_verification_handoff_continues_same_browser(monkeypatch):
     assert cf.call_count == 1 and bf.call_count == 1
     assert output.getvalue().count('"type": "human_required"') == 1
     assert '123456' in loop.choose.call_args.args[1]
+
+
+def test_persistent_process_identity_uses_launch_nonce_not_wrapper_path(monkeypatch, tmp_path):
+    chrome = OwnedChrome()
+    chrome.profile_dir = tmp_path
+    chrome.session_data = {'pid': 123, 'binary': '/opt/google/chrome/google-chrome',
+                           'browser_session': 'a' * 32}
+    command = (f'S /opt/google/chrome/chrome --user-data-dir={tmp_path} '
+               f'--remote-debugging-port=0 --tink-browser-session={"a" * 32}')
+    probe = Mock(return_value=Mock(returncode=0, stdout=command))
+    monkeypatch.setattr('jev_ultrafast.worker_browser.subprocess.run', probe)
+    assert chrome._owned_process_alive()
+    probe.return_value.stdout = command.replace('a' * 32, 'b' * 32)
+    with pytest.raises(RuntimeError, match='browser_session_unavailable'):
+        chrome._owned_process_alive()
+    probe.return_value.stdout = 'Z [chrome] <defunct>'
+    assert not chrome._owned_process_alive()
+
+
+def test_persistent_endpoint_must_match_owned_profile_metadata(monkeypatch, tmp_path):
+    chrome = OwnedChrome()
+    chrome.profile_dir = tmp_path
+    chrome.session_data = {'endpoint': 'ws://127.0.0.1:1111/devtools/browser/original'}
+    (tmp_path / 'DevToolsActivePort').write_text('2222\n/devtools/browser/different\n')
+    connect = Mock()
+    monkeypatch.setattr('jev_ultrafast.worker_browser.connect', connect)
+    with pytest.raises(RuntimeError, match='browser_session_unavailable'):
+        chrome._connect_persistent()
+    connect.assert_not_called()
+
+
+def test_unpublished_launch_is_reaped_after_interruption(monkeypatch, tmp_path):
+    monkeypatch.setenv('TINK_BROWSER_SESSION_DIR', str(tmp_path / 'session'))
+    monkeypatch.setattr('jev_ultrafast.worker_browser.chrome_binary', lambda _=None: '/owned/chrome')
+    process = Mock(pid=123)
+    monkeypatch.setattr('jev_ultrafast.worker_browser.subprocess.Popen', Mock(return_value=process))
+    monkeypatch.setattr(OwnedChrome, '_save_session', Mock(side_effect=Stopped('cancelled', 'cancelled')))
+    with pytest.raises(Stopped):
+        with OwnedChrome():
+            pass
+    process.terminate.assert_called_once()
+    process.wait.assert_called_once()
+
+
+def test_close_waits_for_exiting_process_without_signalling_unknown_pid(monkeypatch, tmp_path):
+    monkeypatch.setenv('TINK_BROWSER_SESSION_DIR', str(tmp_path))
+    chrome = OwnedChrome()
+    chrome.session_dir = tmp_path
+    chrome.socket = Mock()
+    (tmp_path / 'session.json').write_text('{}')
+    chrome._owned_process_alive = Mock(side_effect=[True, RuntimeError('browser_session_unavailable'), False])
+    kill = Mock()
+    monkeypatch.setattr('jev_ultrafast.worker_browser.os.kill', kill)
+    chrome.shutdown()
+    kill.assert_not_called()
+    assert not (tmp_path / 'session.json').exists()
+
+
+def test_close_rechecks_identity_before_signal_escalation(monkeypatch, tmp_path):
+    monkeypatch.setenv('TINK_BROWSER_SESSION_DIR', str(tmp_path))
+    chrome = OwnedChrome()
+    chrome.session_dir = tmp_path
+    chrome.socket = Mock()
+    (tmp_path / 'session.json').write_text('{}')
+    chrome._owned_process_alive = Mock(side_effect=[True, RuntimeError('browser_session_unavailable'), False])
+    clock = Mock(monotonic=Mock(side_effect=[0, 4, 4, 4]))
+    monkeypatch.setattr('jev_ultrafast.worker_browser.time', clock)
+    kill = Mock()
+    monkeypatch.setattr('jev_ultrafast.worker_browser.os.kill', kill)
+    chrome.shutdown()
+    kill.assert_not_called()
+    assert not (tmp_path / 'session.json').exists()

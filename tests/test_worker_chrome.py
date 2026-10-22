@@ -254,3 +254,146 @@ def test_saved_profile_keeps_cookie_and_excludes_concurrent_owner(monkeypatch, t
         browser = Browser(fixture_url, transport=chrome.call)
         assert 'fixture_login=yes' in browser.evaluate('document.cookie')
         browser.close()
+
+
+@pytest.fixture(autouse=True)
+def isolated_session_environment(monkeypatch):
+    monkeypatch.delenv('TINK_BROWSER_PROFILE_DIR', raising=False)
+    monkeypatch.delenv('TINK_BROWSER_SESSION_DIR', raising=False)
+
+
+@pytest.fixture
+def live_session(monkeypatch, tmp_path):
+    from jev_ultrafast.worker_browser import OwnedChrome
+    monkeypatch.setenv('TINK_BROWSER_HEADLESS', '1')
+    monkeypatch.setenv('TINK_BROWSER_SESSION_DIR', str(tmp_path / 'session'))
+    monkeypatch.setenv('TINK_BROWSER_PROFILE_DIR', str(tmp_path / 'profile'))
+    metadata = tmp_path / 'session' / 'session.json'
+    yield metadata
+    if metadata.exists():
+        with OwnedChrome(allow_launch=False) as chrome:
+            chrome.shutdown()
+
+
+def live_decision(choice):
+    return {'choice': choice, 'operation': choice, 'target': None, 'confidence': 1,
+            'probabilities': {choice: 1}, 'latency_ms': 0, 'model': 'offline-fixture', 'usage': {}}
+
+
+def run_live_task(monkeypatch, url=None, choice='DONE', allow=True):
+    monkeypatch.setattr(agent, 'choose', lambda *_a, **_k: live_decision(choice))
+    protocol = Protocol(io.StringIO(), io.StringIO())
+    protocol.messages.put({'type': 'action_response', 'id': '1', 'allow': allow})
+    return run_task(validate_request({'type': 'start', 'protocol_version': 1, 'goal': 'Read the fixture',
+                                      'start_url': url}), protocol)
+
+
+def live_evaluate(expression):
+    from jev_ultrafast.browser import Browser
+    from jev_ultrafast.worker_browser import OwnedChrome
+    with OwnedChrome(allow_launch=False) as chrome:
+        browser = Browser(None, transport=chrome.call, target=chrome.session_data['target_id'], owns_target=False)
+        try:
+            return browser.evaluate(expression)
+        finally:
+            browser.close()
+
+
+def test_live_session_retains_exact_tab_and_memory_after_blocked(monkeypatch, live_session, fixture_url):
+    first = run_live_task(monkeypatch, fixture_url, choice='BLOCKED')
+    assert first['status'] == 'blocked', first
+    assert first['persistent_session'] and not first['session_reused']
+    metadata = json.loads(live_session.read_text())
+    live_evaluate("sessionStorage.setItem('login','yes'); window.fixtureLive=42; "
+                  "document.querySelector('p').textContent='Manual verification complete'")
+    second = run_live_task(monkeypatch)
+    assert second['status'] == 'completed', second
+    assert second['session_reused'] and second['browser_session'] == first['browser_session']
+    assert 'Manual verification complete' in second['evidence'][-1]['text']
+    assert json.loads(live_session.read_text()) == metadata
+    assert live_evaluate("[sessionStorage.getItem('login'),window.fixtureLive]") == ['yes', 42]
+    # A second process cannot close a session while its action lease is held.
+    from jev_ultrafast.worker_browser import OwnedChrome
+    with OwnedChrome(allow_launch=False):
+        closed = subprocess.run([sys.executable, '-m', 'jev_ultrafast.worker', '--close-browser'],
+                                capture_output=True, text=True, timeout=10)
+        assert json.loads(closed.stdout)['stop_reason'] == 'browser_profile_busy'
+
+
+def test_missing_closed_and_recreated_target_are_reported(monkeypatch, live_session, fixture_url):
+    from jev_ultrafast.worker_browser import OwnedChrome
+    assert run_live_task(monkeypatch)['stop_reason'] == 'browser_session_missing'
+    assert not live_session.exists()
+    first = run_live_task(monkeypatch, fixture_url)
+    assert first['status'] == 'completed', first
+    with OwnedChrome(allow_launch=False) as chrome:
+        old_target = chrome.session_data['target_id']
+        chrome.call('Target.closeTarget', targetId=old_target)
+    assert run_live_task(monkeypatch)['stop_reason'] == 'browser_target_closed'
+    recreated = run_live_task(monkeypatch, fixture_url)
+    assert recreated['status'] == 'completed' and not recreated['session_reused']
+    assert json.loads(live_session.read_text())['target_id'] != old_target
+    closed = subprocess.run([sys.executable, '-m', 'jev_ultrafast.worker', '--close-browser'],
+                            capture_output=True, text=True, timeout=15)
+    assert json.loads(closed.stdout)['stop_reason'] == 'browser_closed'
+    assert not live_session.exists()
+    assert run_live_task(monkeypatch)['stop_reason'] == 'browser_session_missing'
+    # Closing an absent session is idempotent and does not launch Chrome.
+    closed = subprocess.run([sys.executable, '-m', 'jev_ultrafast.worker', '--close-browser'],
+                            capture_output=True, text=True, timeout=10)
+    assert json.loads(closed.stdout)['status'] == 'completed'
+    assert not live_session.exists()
+
+
+@pytest.mark.parametrize('phase,stop', [('model', 'cancel'), ('approval', 'cancel'),
+                                        ('model', 'kill'), ('approval', 'kill'), ('approval', 'deny'),
+                                        ('model', 'timeout')])
+def test_task_stop_retains_live_browser_without_late_mutation(monkeypatch, live_session, fixture_url, phase, stop):
+    opened = run_live_task(monkeypatch, fixture_url)
+    assert opened['status'] == 'completed', opened
+    original = json.loads(live_session.read_text())
+    live_evaluate("window.fixtureLive=42;sessionStorage.setItem('login','yes')")
+    choose = ("lambda *a,**k: time.sleep(60)" if phase == 'model' else
+              "lambda page,*a,**k: dict(choice=next(a['id'] for a in page['actions'] "
+              "if a['kind']=='click' and a['label']=='Save'),operation='CLICK',target=None,"
+              "confidence=1,probabilities={},latency_ms=0,model='fixture',usage={})")
+    code = ("import time; from jev_ultrafast import agent; agent.choose=" + choose +
+            "; from jev_ultrafast.worker import main; main()")
+    environment = {key: value for key, value in os.environ.items() if not any(
+        word in key.upper() for word in ('KEY', 'TOKEN', 'SECRET', 'PASSWORD')
+    )}
+    child = subprocess.Popen([sys.executable, '-c', code], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True, start_new_session=True, env=environment)
+    try:
+        child.stdin.write(json.dumps({'type': 'start', 'protocol_version': 1, 'goal': 'Read fixture',
+                                      'timeout_seconds': 10}) + '\n')
+        child.stdin.flush()
+        assert json.loads(child.stdout.readline())['type'] == 'started'
+        assert json.loads(child.stdout.readline())['type'] == 'observation'
+        proposal = None
+        if phase == 'approval':
+            proposal = json.loads(child.stdout.readline())
+            assert proposal['type'] == 'action_proposal'
+        if stop == 'kill':
+            os.killpg(child.pid, signal.SIGKILL)
+        elif stop == 'deny':
+            child.stdin.write(json.dumps({'type': 'action_response', 'id': proposal['id'], 'allow': False}) + '\n')
+            child.stdin.flush()
+        elif stop == 'cancel':
+            child.stdin.write('{"type":"cancel"}\n')
+            child.stdin.flush()
+        child.wait(timeout=15)
+        if stop != 'kill':
+            result = json.loads(child.stdout.read())
+            expected = {'deny': 'denied', 'cancel': 'cancelled', 'timeout': 'timeout'}[stop]
+            assert result['status'] == expected, result
+    finally:
+        if child.poll() is None:
+            os.killpg(child.pid, signal.SIGKILL)
+            child.wait(timeout=5)
+    assert json.loads(live_session.read_text()) == original
+    values = live_evaluate("[sessionStorage.getItem('login'),window.fixtureLive,"
+                           "document.querySelector('p').textContent]")
+    assert values == ['yes', 42, 'Ready']
+    resumed = run_live_task(monkeypatch)
+    assert resumed['status'] == 'completed' and resumed['session_reused']

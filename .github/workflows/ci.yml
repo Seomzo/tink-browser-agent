@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Offline checks and Chrome lifecycle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - name: Install locked dependencies
+        run: uv sync --locked --python 3.12
+      - name: Lint Python
+        run: uv run --no-sync ruff check .
+      - name: Check JavaScript syntax
+        run: |
+          node --check jev_ultrafast/static/app.js
+          node --check jev_ultrafast/snapshot.js
+      - name: Run offline tests
+        run: uv run --no-sync pytest -q --ignore=tests/test_worker_chrome.py --ignore=tests/test_actionability.py
+      - name: Run isolated Chrome lifecycle and actionability tests
+        env:
+          TINK_TEST_OWNED_CHROME: "1"
+          TINK_BROWSER_HEADLESS: "1"
+        run: |
+          google-chrome --version
+          uv run --no-sync pytest -q tests/test_worker_chrome.py tests/test_actionability.py
+      - name: Build distribution
+        run: uv build

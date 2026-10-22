@@ -22,13 +22,15 @@ class Agent:
         self.blocked_refresh_used = False
         self.decision_model = decision_model
         self.before_action = before_action
+        self.owns_browser = browser is None
         self.browser = browser if browser is not None else Browser(url)
         self.record_dir = Path(record_dir) if record_dir else None
         self.screenshots = screenshots or bool(record_dir)
         try:
             page = self.browser.observe(screenshot=self.screenshots)
         except Exception:
-            self.browser.close()
+            if self.owns_browser:
+                self.browser.close()
             raise
         self.state = dict(
             browser=self.browser,
@@ -197,7 +199,8 @@ class Agent:
             yield self.command("tick")
 
     def close(self):
-        self.browser.close()
+        if self.owns_browser:
+            self.browser.close()
 
     def __enter__(self):
         return self
