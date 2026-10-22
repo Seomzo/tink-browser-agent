@@ -283,7 +283,8 @@ def test_cancel_interrupts_pending_approval_without_chrome():
 
 
 @pytest.mark.parametrize("needs_termination", [False, True])
-def test_owned_chrome_launch_is_isolated_and_cleanup_is_owned(monkeypatch, tmp_path, needs_termination):
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_owned_chrome_launch_is_isolated_and_cleanup_is_owned(monkeypatch, tmp_path, needs_termination, platform):
     profile = Mock(name=str(tmp_path))
     profile.name = str(tmp_path)
     (tmp_path / "DevToolsActivePort").write_text("12345\n/devtools/browser/owned\n")
@@ -292,6 +293,9 @@ def test_owned_chrome_launch_is_isolated_and_cleanup_is_owned(monkeypatch, tmp_p
         process.wait.side_effect = [subprocess.TimeoutExpired("chrome", 3), 0]
     socket = Mock(recv=Mock(return_value='{"id":1,"result":{}}'))
     monkeypatch.setenv("OPENROUTER_API_KEY", "do-not-pass-to-chrome")
+    task_tmp = str(tmp_path / ("nested-task-temp-" * 8))
+    monkeypatch.setenv("TMPDIR", task_tmp)
+    monkeypatch.setattr("jev_ultrafast.worker_browser.sys.platform", platform)
     monkeypatch.setattr("jev_ultrafast.worker_browser.chrome_binary", lambda _=None: "/owned/chrome")
     monkeypatch.setattr("jev_ultrafast.worker_browser.tempfile.TemporaryDirectory", Mock(return_value=profile))
     launch = Mock(return_value=process)
@@ -305,11 +309,36 @@ def test_owned_chrome_launch_is_isolated_and_cleanup_is_owned(monkeypatch, tmp_p
         assert "--remote-debugging-port=0" in command
         assert "start_new_session" not in launch.call_args.kwargs  # Stays in host-owned process group.
         assert "OPENROUTER_API_KEY" not in launch.call_args.kwargs["env"]
+        assert launch.call_args.kwargs["env"]["TMPDIR"] == ("/tmp" if platform == "linux" else task_tmp)
         assert dict(os.environ) == dict(original)
     assert json.loads(socket.send.call_args.args[0])["method"] == "Browser.close"
     assert process.terminate.call_count == int(needs_termination)
     assert process.wait.call_count == 1 + int(needs_termination)
     profile.cleanup.assert_called_once()
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_persistent_chrome_temp_path_preserves_session_ownership(monkeypatch, tmp_path, platform):
+    session = tmp_path / ("nested-session-" * 8)
+    monkeypatch.setenv("TINK_BROWSER_SESSION_DIR", str(session))
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "task-temp"))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "do-not-pass-to-chrome")
+    monkeypatch.setattr("jev_ultrafast.worker_browser.sys.platform", platform)
+    monkeypatch.setattr("jev_ultrafast.worker_browser.chrome_binary", lambda _=None: "/owned/chrome")
+    launch = Mock(return_value=Mock(pid=123))
+    monkeypatch.setattr("jev_ultrafast.worker_browser.subprocess.Popen", launch)
+    monkeypatch.setattr(OwnedChrome, "_connect_persistent", Mock())
+    original = dict(os.environ)
+    with OwnedChrome() as chrome:
+        session = session.resolve()
+        assert chrome.session_data["profile_dir"] == str(session / "browser-data")
+        assert f"--user-data-dir={session / 'browser-data'}" in launch.call_args.args[0]
+        assert launch.call_args.kwargs["cwd"] == session
+        assert launch.call_args.kwargs["start_new_session"] is True
+        environment = launch.call_args.kwargs["env"]
+        assert environment["TMPDIR"] == ("/tmp" if platform == "linux" else str(session / "tmp"))
+        assert "OPENROUTER_API_KEY" not in environment
+        assert dict(os.environ) == original
 
 
 def test_password_proposal_is_masked_but_executor_receives_value(monkeypatch):

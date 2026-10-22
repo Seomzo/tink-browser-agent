@@ -83,6 +83,9 @@ class OwnedChrome:
             chrome_env = {k: v for k, v in os.environ.items() if not any(
                 word in k.upper() for word in ("KEY", "TOKEN", "SECRET", "PASSWORD")
             )}
+            # Chrome's singleton socket must fit Linux's short Unix socket path limit.
+            if sys.platform == "linux":
+                chrome_env["TMPDIR"] = "/tmp"
             self.process = subprocess.Popen(
                 args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 env=chrome_env,
@@ -147,7 +150,8 @@ class OwnedChrome:
             chrome_env = {k: v for k, v in os.environ.items() if not any(
                 word in k.upper() for word in ("KEY", "TOKEN", "SECRET", "PASSWORD")
             )}
-            chrome_env["TMPDIR"] = str(tmp)
+            # Keep Linux's singleton socket path short, independent of the session path.
+            chrome_env["TMPDIR"] = "/tmp" if sys.platform == "linux" else str(tmp)
             browser_session = uuid.uuid4().hex
             args = [binary, f"--user-data-dir={self.profile_dir}", "--remote-debugging-port=0",
                     f"--tink-browser-session={browser_session}",
