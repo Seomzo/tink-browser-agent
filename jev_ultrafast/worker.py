@@ -36,6 +36,8 @@ SUMMARIES = {
     "invalid_request": "The browser request did not match protocol version 1.",
     "invalid_response": "The host returned an invalid action approval.",
     "worker_error": "The browser worker failed. Review partial evidence before retrying.",
+    "navigation_failed": ("The requested page could not load. "
+                          "Check the page address and the browser error in the evidence."),
     "browser_session_missing": "No live browser session exists. Supply a starting URL to open one.",
     "browser_target_closed": "The retained browser tab was closed. Supply a starting URL to open a new tab.",
     "browser_profile_busy": "Another browser task owns this profile. Wait for it to finish or cancel it first.",
@@ -288,6 +290,8 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
                     "text": str(page.get("text", ""))[:6000]}
             evidence.append(item)
             protocol.emit("observation", **item)
+        if str(page.get("url", "")).startswith("chrome-error://"):
+            raise Stopped("blocked", "navigation_failed")
 
     def before_action(action, page, text):
         response = request.get("verification_response")

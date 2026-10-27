@@ -175,6 +175,16 @@ def test_partial_execution_survives_observation_failure(monkeypatch):
     assert "SECRET" not in json.dumps(result)
 
 
+def test_failed_navigation_reports_page_error_without_calling_model(monkeypatch):
+    protocol, _, browser, bf, cf = setup_loop(monkeypatch)
+    browser.observe.return_value.update(url="chrome-error://chromewebdata/", text="DNS_PROBE_FINISHED_NXDOMAIN")
+    result = run_task(request(), protocol, chrome_factory=cf, browser_factory=bf)
+    assert (result["status"], result["stop_reason"]) == ("blocked", "navigation_failed")
+    assert result["evidence"][0]["text"] == "DNS_PROBE_FINISHED_NXDOMAIN"
+    loop.choose.assert_not_called()
+    browser.act.assert_not_called()
+
+
 def test_model_blocked_after_action_is_not_no_progress(monkeypatch):
     protocol, _, _, browser_factory, chrome_factory = setup_loop(monkeypatch, choices=("e1", "BLOCKED"))
     result = run_task(request(), protocol, chrome_factory=chrome_factory, browser_factory=browser_factory)
