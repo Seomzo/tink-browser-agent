@@ -1,11 +1,15 @@
 """Opt-in DOM checks using temporary Chrome only; no external sites or model calls."""
 
+import json
 import os
 import sys
+import time
+from unittest.mock import Mock
 from urllib.parse import quote
 
 import pytest
 
+from jev_ultrafast import agent as loop
 from jev_ultrafast.browser import Browser, StalePage
 from jev_ultrafast.worker_browser import OwnedChrome
 
@@ -90,6 +94,228 @@ def test_duplicate_link_labels_include_bounded_card_context_and_actual_destinati
     assert all(len(a.get("context", "")) <= 400 for a in page["actions"])
     browser.evaluate("document.querySelector('h2').textContent='Changed ticket tier'")
     assert not browser.fresh(page, links[0])
+
+
+COUNTDOWN_FORM = """
+<form id="verification" action="https://example.test/verify" onsubmit="event.preventDefault()">
+  <h2 id="heading">Verify sign-in</h2>
+  <p id="account">Account: example account; total $10</p>
+  <button id="total" disabled>Total $10</button>
+  <label><span id="label">Code</span><input id="code" aria-describedby="description"
+    oninput="window.fills=(window.fills||0)+1"></label>
+  <p id="description">Use the current code</p>
+  <button id="verify" type="button" onclick="window.verifications=(window.verifications||0)+1">Verify</button>
+  <button id="resend" type="button" role="timer" disabled>Resend in 30s</button>
+</form>"""
+
+
+def test_countdown_during_prediction_text_generation_and_approval_executes_each_action_once(browser, monkeypatch):
+    browser.evaluate("document.body.innerHTML=" + json.dumps(COUNTDOWN_FORM))
+    browser.evaluate("window.ticks=0; window.timer=setInterval(()=>{ "
+                     "document.querySelector('#resend').textContent='Resend in '+(++window.ticks)+'s'; },100)")
+
+    def predict(page, *_args, **_kwargs):
+        action = next(a for a in page["actions"] if a["kind"] == "fill")
+        time.sleep(0.15)
+        return {"choice": action["id"], "probabilities": {action["id"]: 1}, "confidence": 1,
+                "latency_ms": 0, "operation": "TYPE_TEXT", "target": "1", "usage": {}}
+
+    def generate_text(_context):
+        time.sleep(0.15)
+        return "test-code", {"model": "offline", "latency_ms": 0}
+
+    helper = Mock(side_effect=generate_text)
+    approval = Mock(side_effect=lambda *_args: time.sleep(1.05))
+    monkeypatch.setattr(loop, "choose", predict)
+    monkeypatch.setattr(loop, "field_text", helper)
+    agent = loop.Agent(None, "Fill the test code", browser=browser, before_action=approval)
+    result = agent.command("tick")
+    assert len(result["history"]) == 1 and result["history"][0]["kind"] == "fill"
+    assert browser.evaluate("document.querySelector('#code').value") == "test-code"
+    assert browser.evaluate("window.fills") == 1
+    assert browser.evaluate("window.ticks") >= 10
+    helper.assert_called_once()
+    approval.assert_called_once()
+    page = browser.observe(screenshot=False)
+    verify = next(a for a in page["actions"] if a["label"] == "Verify")
+    time.sleep(0.15)
+    assert not browser.fresh(page)  # The full observation still includes the live text.
+    browser.act(verify, page)
+    assert browser.evaluate("window.verifications") == 1
+    browser.evaluate("clearInterval(window.timer)")
+
+
+@pytest.mark.parametrize("markup", [
+    '<span id="resend" role="timer">30 seconds</span>',
+    '<button id="resend" aria-disabled="true" role="timer">30 seconds</button>',
+])
+def test_unrelated_semantic_timer_text_does_not_invalidate_target(browser, markup):
+    browser.evaluate("document.body.innerHTML=" + json.dumps(COUNTDOWN_FORM))
+    browser.evaluate("document.querySelector('#resend').outerHTML=" + json.dumps(markup))
+    page = browser.observe(screenshot=False)
+    browser.evaluate("document.querySelector('#resend').textContent='29 seconds'")
+    for action in page["actions"]:
+        if action["kind"] == "fill" or action["label"] == "Verify":
+            assert browser.fresh(page, action)
+
+
+@pytest.mark.parametrize("change", [
+    "document.querySelector('#code').value='already changed'",
+    "document.querySelector('#code').outerHTML=document.querySelector('#code').outerHTML",
+    "document.querySelector('#label').textContent='Different credential'",
+    "document.querySelector('#account').textContent='Account: another account; total $10'",
+    "document.querySelector('#account').textContent='Account: example account; total $100'",
+    "document.querySelector('#total').textContent='Total $100'",
+    "document.querySelector('#heading').textContent='Confirm purchase'",
+    "document.querySelector('#verification').action='https://example.test/different'",
+    "const old=document.querySelector('#verification'), replacement=document.createElement('form');"
+    "replacement.action=old.action; replacement.append(...old.childNodes); old.replaceWith(replacement)",
+    "document.querySelector('#description').setAttribute('role','timer');"
+    "document.querySelector('#description').textContent='Use another credential'",
+    "document.querySelector('#account').setAttribute('aria-live','polite');"
+    "document.querySelector('#account').textContent='Account: example account; total $100'",
+    "document.querySelector('#verify').textContent='Confirm purchase'",
+    "document.querySelector('#resend').outerHTML='<span>Unmarked changed text 29</span>'",
+])
+@pytest.mark.parametrize("kind", ["fill", "click"])
+def test_changed_target_form_description_and_static_context_still_rejects(browser, change, kind):
+    browser.evaluate("document.body.innerHTML=" + json.dumps(COUNTDOWN_FORM))
+    page = browser.observe(screenshot=False)
+    action = next(a for a in page["actions"] if a["kind"] == kind and
+                  (kind == "fill" or a["label"] == "Verify"))
+    browser.evaluate(change)
+    with pytest.raises(StalePage):
+        browser.act(action, page, text="must-not-type")
+    assert browser.evaluate("window.fills || 0") == 0
+    assert browser.evaluate("window.verifications || 0") == 0
+
+
+def test_selected_countdown_control_own_label_change_still_rejects_click(browser):
+    browser.evaluate("document.body.innerHTML=" + json.dumps(COUNTDOWN_FORM))
+    browser.evaluate("document.querySelector('#resend').disabled=false")
+    page = browser.observe(screenshot=False)
+    action = next(a for a in page["actions"] if a["label"] == "Resend in 30s")
+    browser.evaluate("document.querySelector('#resend').textContent='Resend in 29s'")
+    with pytest.raises(StalePage):
+        browser.act(action, page)
+
+
+@pytest.mark.parametrize("kind", ["fill", "click"])
+def test_associated_field_description_stays_guarded_even_when_marked_as_timer(browser, kind):
+    browser.evaluate("document.body.innerHTML=" + json.dumps(COUNTDOWN_FORM))
+    browser.evaluate("document.querySelector('#description').setAttribute('role','timer')")
+    page = browser.observe(screenshot=False)
+    action = next(a for a in page["actions"] if a["kind"] == kind and
+                  (kind == "fill" or a["label"] == "Verify"))
+    browser.evaluate("document.querySelector('#description').textContent='Code for another account'")
+    with pytest.raises(StalePage):
+        browser.act(action, page, text="must-not-type")
+    assert browser.evaluate("window.fills || 0") == 0
+    assert browser.evaluate("window.verifications || 0") == 0
+
+
+def test_non_content_nodes_never_pollute_control_labels_or_freshness(browser):
+    browser.evaluate("""document.body.innerHTML=`<button onclick="window.clicks=(window.clicks||0)+1">
+      <span>RO</span><style id="generated-style">#generated-123{overflow:hidden}</style><span>Repair Order</span>
+      <script type="application/json">{"hidden":"script content"}</script>
+      <noscript>fallback content</noscript><template>template content</template></button>`""")
+    page = browser.observe(screenshot=False)
+    action = next(a for a in page["actions"] if a["kind"] == "click")
+    assert action["label"].split() == ["RO", "Repair", "Order"]
+    assert "generated-123" not in page["text"]
+    browser.evaluate("document.querySelector('#generated-style').textContent='#generated-456{overflow:hidden}'")
+    assert browser.fresh(page, action)
+    browser.act(action, page)
+    assert browser.evaluate("window.clicks") == 1
+
+
+@pytest.mark.parametrize("kind", ["fill", "click"])
+def test_unmarked_disabled_countdown_stays_conservatively_guarded(browser, kind):
+    browser.evaluate("document.body.innerHTML=" + json.dumps(COUNTDOWN_FORM))
+    browser.evaluate("document.querySelector('#resend').removeAttribute('role')")
+    page = browser.observe(screenshot=False)
+    action = next(a for a in page["actions"] if a["kind"] == kind and
+                  (kind == "fill" or a["label"] == "Verify"))
+    browser.evaluate("document.querySelector('#resend').textContent='Resend in 29s'")
+    with pytest.raises(StalePage):
+        browser.act(action, page, text="must-not-type")
+    assert browser.evaluate("window.fills || 0") == 0
+    assert browser.evaluate("window.verifications || 0") == 0
+
+
+ICON_HTML = """<style>.icon{display:inline-block;width:40px;height:40px;cursor:pointer}</style>
+<span id="badge"><div id="icon" class="icon" role="img" aria-label="Filter records"
+ onclick="window.filters=(window.filters||0)+1;document.querySelector('#panel').hidden=false">
+ <svg width="40" height="40"><rect width="40" height="40" fill="blue"/></svg>
+</div></span><div id="panel" hidden>Filter panel</div>
+<div id="cover" style="position:fixed;inset:0;z-index:100;background:white" hidden></div>"""
+
+
+def test_labeled_pointer_icon_is_an_observed_click_target(browser):
+    browser.evaluate("document.body.innerHTML=" + json.dumps(ICON_HTML))
+    page = browser.observe(screenshot=False)
+    icons = [a for a in page["actions"] if a.get("role") == "img"]
+    assert len(icons) == 1
+    assert (icons[0]["kind"], icons[0]["label"]) == ("click", "Filter records")
+    browser.act(icons[0], page)
+    assert browser.evaluate("window.filters") == 1
+    assert browser.evaluate("document.querySelector('#panel').hidden") is False
+
+
+@pytest.mark.parametrize("change", [
+    "document.querySelector('#icon').style.cursor='default'",
+    "document.querySelector('#icon').removeAttribute('aria-label')",
+    "document.querySelector('#icon').style.display='none'",
+    "document.querySelector('#cover').hidden=false",
+    "document.querySelector('#icon').setAttribute('aria-disabled','true')",
+    "document.querySelector('#badge').setAttribute('aria-disabled','true')",
+    "document.querySelector('#badge').inert=true",
+])
+def test_non_actionable_or_decorative_icons_are_not_exposed(browser, change):
+    browser.evaluate("document.body.innerHTML=" + json.dumps(ICON_HTML))
+    browser.evaluate(change)
+    page = browser.observe(screenshot=False)
+    assert not any(a.get("role") == "img" for a in page["actions"])
+
+
+def test_icon_inside_existing_button_is_not_duplicated_or_blocking_button_hit(browser):
+    browser.evaluate("""document.body.innerHTML=`
+      <button aria-label="Open menu" onclick="window.menus=(window.menus||0)+1">
+        <span role="img" aria-label="Menu icon" style="display:block;width:100%;height:100%;cursor:pointer">
+          <svg width="200" height="50"><rect width="200" height="50" fill="blue"/></svg>
+        </span>
+      </button>`""")
+    page = browser.observe(screenshot=False)
+    clicks = [a for a in page["actions"] if a["kind"] == "click"]
+    assert [a["label"] for a in clicks] == ["Open menu"]
+    browser.act(clicks[0], page)
+    assert browser.evaluate("window.menus") == 1
+
+
+@pytest.mark.parametrize("change", [
+    "document.querySelector('#icon').style.cursor='default'",
+    "document.querySelector('#cover').hidden=false",
+    "document.querySelector('#badge').setAttribute('aria-disabled','true')",
+    "const button=document.createElement('button'); document.querySelector('#badge').append(button);"
+    "button.append(document.querySelector('#icon'))",
+])
+@pytest.mark.parametrize("direct_executor", [False, True])
+def test_icon_eligibility_is_rechecked_before_any_input(browser, change, direct_executor):
+    from jev_ultrafast.browser import browser_operation
+
+    browser.evaluate("document.body.innerHTML=" + json.dumps(ICON_HTML))
+    page = browser.observe(screenshot=False)
+    action = next(a for a in page["actions"] if a.get("role") == "img")
+    browser.evaluate(change)
+    assert not browser.fresh(page, action)
+    with pytest.raises(StalePage):
+        if direct_executor:
+            # Also cover a change between the freshness read and the final input check.
+            browser_operation({"operation": "act", "session": browser.session, "action": action},
+                              transport=browser._cdp)
+        else:
+            browser.act(action, page)
+    assert browser.evaluate("window.filters || 0") == 0
 
 
 @pytest.mark.parametrize("nested", [True, False])

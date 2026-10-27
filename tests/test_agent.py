@@ -216,6 +216,13 @@ def test_stale_decision_is_consumed_before_any_mutation(runner):
     assert runner.state["decision"] is None
 
 
+def test_fill_pre_text_guard_uses_selected_target(runner, monkeypatch):
+    monkeypatch.setattr(loop, "field_text", Mock(return_value=("book", {"model": "test", "latency_ms": 0})))
+    observed = runner.state["page"]
+    runner.command("act", {"fingerprint": observed["fingerprint"]})
+    runner.state["browser"].fresh.assert_called_once_with(observed, observed["actions"][0])
+
+
 def test_generated_text_reused_only_for_identical_retry_context(runner, monkeypatch):
     helper = Mock(return_value=("book", {"model": "test", "latency_ms": 10}))
     monkeypatch.setattr(loop, "field_text", helper)

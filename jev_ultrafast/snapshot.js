@@ -19,7 +19,7 @@
   const visible = e => !e.closest('[aria-hidden="true"],[inert]') &&
     e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});
   const name = (e,seen=new Set()) => {
-    if (!e || seen.has(e)) return '';
+    if (!e || seen.has(e) || e.matches('script,style,noscript,template')) return '';
     seen.add(e);
     const referenced=(e.getAttribute('aria-labelledby')||'').split(/\s+/)
       .map(id=>name(document.getElementById(id),seen)).filter(Boolean).join(' ');
@@ -27,7 +27,7 @@
       [...(e.labels||[])].map(l=>name(l,seen)).filter(Boolean).join(' ') ||
       (['button','submit','reset'].includes(e.type) ? e.value : '') || e.getAttribute('alt') ||
       (e.tagName==='INPUT' ? '' : [...e.childNodes].map(n=>n.nodeType===3 ? n.textContent :
-        n.nodeType===1 && n.getAttribute('aria-hidden')!=='true' ? name(n,seen) : '').join(' ').trim()) ||
+        n.nodeType===1 && n.getAttribute('aria-hidden')!=='true' ? name(n,seen) : '').filter(Boolean).join(' ').trim()) ||
       e.getAttribute('title') || e.getAttribute('placeholder') || '';
   };
   const roles=['button','link','checkbox','radio','switch','tab','menuitem','menuitemradio',
@@ -48,10 +48,19 @@
     }
     return null;
   };
-  cache.context = e => {
+  cache.clickableIcon=e=>{
+    if (!e?.isConnected || e.getAttribute('role')!=='img' || e.matches(selector) ||
+        e.parentElement?.closest(selector) || !visible(e) ||
+        e.closest(':disabled,[aria-disabled="true"]') || getComputedStyle(e).cursor!=='pointer') return false;
+    const labeled=['aria-label','alt','title'].some(attribute=>e.getAttribute(attribute)?.trim()) ||
+      (e.getAttribute('aria-labelledby')||'').split(/\s+/)
+        .some(id=>name(document.getElementById(id)).trim());
+    return Boolean(labeled && cache.hitPoint(e));
+  };
+  cache.context = (e,readText=p=>p.innerText||'') => {
     const own=name(e).replace(/\s+/g,' ').trim();
     for (let p=e, depth=0; p && p!==document.body && depth<4; p=p.parentElement, depth++) {
-      const text=(p.innerText||'').replace(/\s+/g,' ').trim();
+      const text=readText(p).replace(/\s+/g,' ').trim();
       if (text.length>400) break;
       if (text && text!==own) return text;
     }
@@ -60,6 +69,7 @@
   const role = e => {
     const explicit=e.getAttribute('role');
     if (roles.includes(explicit)) return explicit;
+    if (explicit==='img' && cache.clickableIcon(e)) return 'img';
     if (e.tagName==='BUTTON' || e.tagName==='SUMMARY') return 'button';
     if (e.tagName==='A') return 'link';
     if (e.tagName==='SELECT') return 'combobox';
@@ -73,16 +83,38 @@
     }
     return null;
   };
+  const descriptions=e=>(e.getAttribute('aria-describedby')||'').split(/\s+/)
+    .map(id=>[id,document.getElementById(id)?.textContent?.slice(0,6000)||'']);
   cache.pageKey=()=>[performance.timeOrigin,location.href,scrollX,scrollY,innerWidth,innerHeight,
     [...document.querySelectorAll('input,textarea,select')].filter(safe)
-      .map(e=>[identity(e),cache.fieldValue(e),e.checked,e.selectedIndex,e.disabled,e.readOnly])];
+      .map(e=>[identity(e),cache.fieldValue(e),e.checked,e.selectedIndex,e.disabled,e.readOnly,
+        name(e),descriptions(e)])];
+  cache.guardText=(scope,target)=>{
+    if (!scope) return '';
+    const words=[], walker=document.createTreeWalker(scope,NodeFilter.SHOW_TEXT);
+    let node,length=0;
+    while ((node=walker.nextNode()) && length<6000) {
+      const parent=node.parentElement, value=node.textContent.trim();
+      if (!value || !parent || !visible(parent) || parent.closest('script,style,noscript,template')) continue;
+      const timer=parent.closest('[role="timer"]');
+      // Only an explicitly marked, unrelated timer may change without a new decision.
+      // Target labels/descriptions and all other context (including disabled prices) stay guarded.
+      if (timer && timer!==target && !timer.contains(target) && !target.contains(timer)) continue;
+      words.push(value); length+=value.length;
+    }
+    return words.join(' ').slice(0,6000);
+  };
   cache.guard=e=>{
     if (!e?.isConnected || !visible(e)) return null;
     const scope=e.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"]') || e.parentElement;
+    const form=e.form || e.closest('form');
     return [identity(e),role(e),name(e),cache.fieldValue(e),e.checked??null,e.selectedIndex??null,
       e.readOnly??null,e.matches(':disabled'),e.getAttribute('aria-disabled'),
       e.getAttribute('aria-expanded'),e.getAttribute('aria-checked'),e.getAttribute('aria-selected'),
-      e.getAttribute('href'),scope?.innerText?.slice(0,6000)||'',cache.context(e)];
+      e.getAttribute('href'),scope ? identity(scope) : null,
+      form ? [identity(form),form.action,form.method] : null,
+      e.getAttribute('type'),e.getAttribute('name'),e.getAttribute('autocomplete'),descriptions(e),
+      cache.guardText(scope,e),cache.context(e,p=>cache.guardText(p,e))];
   };
   cache.escapeTarget=()=>{
     const overlays=[...document.querySelectorAll('dialog[open],[role="dialog"],[role="menu"]')]
@@ -106,7 +138,7 @@
       e.getAttribute('aria-readonly')!=='true' && Boolean(cache.hitPoint(e));
   };
   const actions=[];
-  for (const e of document.querySelectorAll(selector)) {
+  for (const e of document.querySelectorAll(selector+',[role="img"]')) {
     if (!safe(e) || !visible(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"]')) continue;
     const r=e.getBoundingClientRect(), rname=role(e);
     if (!rname || !cache.hitPoint(e)) continue;

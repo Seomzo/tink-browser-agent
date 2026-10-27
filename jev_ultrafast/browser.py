@@ -156,7 +156,7 @@ class Browser:
         if action is not None and action["kind"] == "back":
             if back_action(self.call("Page.getNavigationHistory")) != action:
                 return False
-        if action is not None and action["kind"] in {"click", "select"}:
+        if action is not None and action["kind"] in {"click", "select", "fill"}:
             node = action["node"]
             if type(node) is not int:
                 return False
@@ -253,6 +253,7 @@ def browser_operation(request, *, transport=None):
               const e=window.__jevFast?.nodes.get(action.node);
               if (!e?.isConnected || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]') ||
                   !e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) return null;
+              if (action.role==='img' && !window.__jevFast?.clickableIcon(e)) return null;
               if (action.kind==='fill' && (e.readOnly || e.getAttribute('aria-readonly')==='true')) return null;
               const point=window.__jevFast?.hitPoint(e);
               if (!point) return null;
