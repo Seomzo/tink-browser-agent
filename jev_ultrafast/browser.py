@@ -156,13 +156,15 @@ class Browser:
         if action is not None and action["kind"] == "back":
             if back_action(self.call("Page.getNavigationHistory")) != action:
                 return False
-        if action is not None and action["kind"] in {"click", "select", "fill"}:
+        if action is not None and action["kind"] in {"click", "select", "fill", "key"}:
             node = action["node"]
             if type(node) is not int:
                 return False
+            key_check = (f" && c.keyAllowed(c.nodes.get({node}),{json.dumps(action.get('key'))}) === true"
+                         if action["kind"] == "key" else "")
             current = self.evaluate(
                 "(() => { const c=window.__jevFast; "
-                f"return c ? [c.pageKey(),c.guard(c.nodes.get({node}))] : null; }})()"
+                f"return c{key_check} ? [c.pageKey(),c.guard(c.nodes.get({node}))] : null; }})()"
             )
             return current == [page["page_key"], page["guards"].get(str(node))]
         return self.evaluate(MARKER) == page["marker"]

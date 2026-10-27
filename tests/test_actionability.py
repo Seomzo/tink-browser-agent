@@ -518,6 +518,52 @@ def test_keyboard_rechecks_dom_after_approval(browser, change):
                           transport=browser._cdp)
 
 
+def keyboard_observation(browser, key):
+    browser.evaluate("""document.body.innerHTML=`
+      <aside><div id="overlay" role="menu" tabindex="-1">Open menu</div></aside>
+      <form><input id="query" type="search" aria-label="Search" value="observed search"></form>
+      <input id="other" aria-label="Other field"><p id="ticker">30 seconds</p>`;
+      window.keyExecutions=0;
+      document.querySelector('#overlay').onkeydown=event=>{
+        if(event.key==='Escape'){window.keyExecutions++;event.currentTarget.hidden=true;}
+      };
+      document.querySelector('form').onsubmit=event=>{event.preventDefault();window.keyExecutions++;}
+    """)
+    browser.evaluate("window.keyboardTarget=document.querySelector(" +
+                     json.dumps("#overlay" if key == "Escape" else "#query") + ");window.keyboardTarget.focus()")
+    page = browser.observe(screenshot=False)
+    return page, next(a for a in page["actions"] if a.get("key") == key)
+
+
+@pytest.mark.parametrize("key", ["Escape", "Enter"])
+def test_keyboard_target_remains_fresh_after_unrelated_ticker_changes(browser, key):
+    page, action = keyboard_observation(browser, key)
+    browser.evaluate("document.querySelector('#ticker').textContent='29 seconds'")
+    assert not browser.fresh(page)  # The whole-page observation changed.
+    assert browser.fresh(page, action)
+    browser.act(action, page)
+    assert browser.evaluate("window.keyExecutions") == 1
+    assert browser.evaluate("document.querySelector('#query').value") == "observed search"
+
+
+@pytest.mark.parametrize("key", ["Escape", "Enter"])
+@pytest.mark.parametrize("change", [
+    "document.querySelector('#other').value='changed field value'",
+    "history.pushState({},'', '#changed-document-url')",
+    "window.keyboardTarget.outerHTML=window.keyboardTarget.outerHTML",
+    "window.keyboardTarget.setAttribute('aria-label','Changed purpose')",
+    "document.body.insertAdjacentHTML('beforeend','<div id=new-menu role=menu tabindex=-1>Other menu</div>');"
+    "document.querySelector('#new-menu').focus()",
+])
+def test_targeted_keyboard_freshness_preserves_document_field_target_and_overlay_guards(browser, key, change):
+    page, action = keyboard_observation(browser, key)
+    browser.evaluate(change)
+    assert not browser.fresh(page, action)
+    with pytest.raises(StalePage):
+        browser.act(action, page)
+    assert browser.evaluate("window.keyExecutions") == 0
+
+
 def test_back_uses_observed_history_and_rejects_same_url_new_entry(browser):
     browser.evaluate("history.pushState({},'', '#one');history.pushState({},'', '#two')")
     page = browser.observe(screenshot=False)
