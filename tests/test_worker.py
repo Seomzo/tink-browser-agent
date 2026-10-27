@@ -130,7 +130,7 @@ def test_fill_approval_contains_generated_text_before_mutation(monkeypatch):
     browser.act.side_effect = act
     result = run_task(request(), protocol, chrome_factory=chrome_factory, browser_factory=browser_factory)
     assert result["status"] == "completed" and result["stop_reason"] == "model_done"
-    assert "available_actions" not in result
+    assert result["available_actions"] == [{"kind": "fill", "role": "textbox", "label": "Search"}]
     assert result["outcome_verified"] is False
     assert result["step_count"] == 1 and result["evidence"][0]["title"] == "Search"
     assert result["usage"] == {"decision_calls": 2, "text_calls": 1, "input_tokens": 40, "output_tokens": 2,
@@ -173,6 +173,7 @@ def test_partial_execution_survives_observation_failure(monkeypatch):
     browser.observe.side_effect = [page(), RuntimeError("SECRET should never leave worker")]
     result = run_task(request(), protocol, chrome_factory=chrome_factory, browser_factory=browser_factory)
     assert result["status"] == "error" and result["stop_reason"] == "worker_error"
+    assert "available_actions" not in result
     assert result["step_count"] == 1 and len(result["evidence"]) == 1
     assert "SECRET" not in json.dumps(result)
 
@@ -193,6 +194,31 @@ def test_model_blocked_after_action_is_not_no_progress(monkeypatch):
     assert result["stop_reason"] == "model_blocked"
 
 
+def test_successful_inspection_returns_observed_open_control_without_executing_it(monkeypatch):
+    protocol, _, browser, bf, cf = setup_loop(monkeypatch, choices=("DONE",))
+    browser.observe.return_value["actions"] = [
+        {"id": "combo", "kind": "click", "role": "combobox", "label": "Open filter type",
+         "context": "Filter settings", "value": "PRIVATE VALUE", "node": 2, "open_node": 3, "open_display": 4},
+    ]
+    result = run_task(request(goal="Inspect the available controls"), protocol, chrome_factory=cf, browser_factory=bf)
+    assert (result["status"], result["stop_reason"], result["step_count"]) == ("completed", "model_done", 0)
+    assert result["available_actions"] == [
+        {"kind": "click", "role": "combobox", "label": "Open filter type", "context": "Filter settings"},
+    ]
+    browser.act.assert_not_called()
+
+
+def test_tabs_only_completion_has_no_page_controls(monkeypatch):
+    monkeypatch.setenv("TINK_BROWSER_SESSION_DIR", "/owned/session")
+    protocol, _, _, bf, cf = setup_loop(monkeypatch)
+    cf.return_value.session_data = {"browser_session": "owned", "target_id": "source"}
+    cf.return_value.call.return_value = {"targetInfos": [{"targetId": "source", "type": "page"}]}
+    result = run_task(request(action="tabs", start_url=None), protocol, chrome_factory=cf, browser_factory=bf)
+    assert (result["status"], result["stop_reason"]) == ("completed", "tabs_listed")
+    assert "available_actions" not in result
+    bf.assert_not_called()
+
+
 @pytest.mark.parametrize("reason,choices,max_steps,reject", [
     ("model_blocked", ("BLOCKED",), 20, False),
     ("no_progress", ("e1", "e1", "e1"), 20, False),
@@ -206,7 +232,7 @@ def test_blocked_handoff_lists_only_observed_control_descriptions(monkeypatch, r
     observed["actions"] += [
         {"id": "combo", "kind": "click", "role": "combobox", "label": "Open filter type",
          "value": "PRIVATE SELECTED VALUE", "node": 2, "open_node": 3, "open_display": 4,
-         "selector": "PRIVATE SELECTOR", "context": "PRIVATE CONTEXT"},
+         "selector": "PRIVATE SELECTOR", "context": "Filter settings"},
         {"id": "wait", "kind": "wait", "label": "Wait for the page to update"},
     ]
     if reject:
@@ -215,7 +241,7 @@ def test_blocked_handoff_lists_only_observed_control_descriptions(monkeypatch, r
     assert (result["status"], result["stop_reason"]) == ("blocked", reason)
     assert result["available_actions"] == [
         {"kind": "fill", "role": "textbox", "label": "Search"},
-        {"kind": "click", "role": "combobox", "label": "Open filter type"},
+        {"kind": "click", "role": "combobox", "label": "Open filter type", "context": "Filter settings"},
         {"kind": "wait", "label": "Wait for the page to update"},
     ]
     assert "PRIVATE" not in json.dumps(result["available_actions"])
@@ -224,13 +250,15 @@ def test_blocked_handoff_lists_only_observed_control_descriptions(monkeypatch, r
 def test_blocked_control_handoff_is_bounded_to_observed_fields(monkeypatch):
     protocol, _, browser, bf, cf = setup_loop(monkeypatch, choices=("BLOCKED",))
     browser.observe.return_value["actions"] = [
-        {"id": f"e{index}", "node": index, "kind": "click", "role": "button", "label": "L" * 300,
+        {"id": f"e{index}", "node": index, "kind": "click", "role": "button", "label": "L" * 300, "context": "C" * 300,
          "value": "PRIVATE VALUE", "selector": "PRIVATE SELECTOR"}
         for index in range(300)
     ]
     result = run_task(request(), protocol, chrome_factory=cf, browser_factory=bf)
     assert result["stop_reason"] == "model_blocked"
-    assert result["available_actions"] == [{"kind": "click", "role": "button", "label": "L" * 200}] * 250
+    assert result["available_actions"] == [
+        {"kind": "click", "role": "button", "label": "L" * 200, "context": "C" * 200},
+    ] * 250
 
 
 def test_blocked_control_labels_use_existing_sensitive_value_redaction(monkeypatch):
@@ -239,12 +267,14 @@ def test_blocked_control_labels_use_existing_sensitive_value_redaction(monkeypat
     initial = page()
     initial["actions"][0]["sensitive"] = True
     final = {**page(), "fingerprint": "after-fill", "actions": [
-        {"id": "next", "node": 2, "kind": "click", "role": "button", "label": "Echo click"},
+        {"id": "next", "node": 2, "kind": "click", "role": "button", "label": "Echo click", "context": "Section click"},
     ]}
     browser.observe.side_effect = [initial, final]
     browser.wait_for_change.return_value = final
     result = run_task(request(), protocol, chrome_factory=cf, browser_factory=bf)
-    assert result["available_actions"] == [{"kind": "click", "role": "button", "label": "Echo [redacted]"}]
+    assert result["available_actions"] == [
+        {"kind": "click", "role": "button", "label": "Echo [redacted]", "context": "Section [redacted]"},
+    ]
 
 
 def test_protocol_rejects_wrong_approval_id_and_denies_by_default():

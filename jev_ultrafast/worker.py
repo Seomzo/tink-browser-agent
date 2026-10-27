@@ -535,11 +535,11 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
             "downloads": downloads.files if downloads is not None else [],
             "approval_count": protocol.approval_count,
             "approval_wait_ms": approval_wait_ms}
-    if status == "blocked" and reason != "verification_required" and state.get("page"):
-        # Keep code-owned kinds/roles exact; snapshot redacts known sensitive label text.
+    if status in {"blocked", "completed"} and reason != "verification_required" and state.get("page"):
+        # Keep code-owned kinds/roles exact; snapshot redacts known sensitive descriptive text.
         result["available_actions"] = [
-            {key: (redacted[key] if key == "label" else action[key])[:200]
-             for key in ("kind", "role", "label") if isinstance(action.get(key), str)}
+            {key: (redacted[key] if key in {"label", "context"} else action[key])[:200]
+             for key in ("kind", "role", "label", "context") if isinstance(action.get(key), str)}
             for action, redacted in zip(state["page"].get("actions", [])[:250],
                                         agent.snapshot()["page"].get("actions", [])[:250])
         ]
