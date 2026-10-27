@@ -254,6 +254,11 @@ def browser_operation(request, *, transport=None):
               if (!e?.isConnected || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]') ||
                   !e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) return null;
               if (action.role==='img' && !window.__jevFast?.clickableIcon(e)) return null;
+              if (action.open_node!==undefined || action.open_display!==undefined) {
+                const opening=window.__jevFast?.comboboxOpen(e);
+                return action.kind==='click' && opening && opening.container===action.open_node &&
+                  opening.display===action.open_display ? opening.point : null;
+              }
               if (action.kind==='fill' && (e.readOnly || e.getAttribute('aria-readonly')==='true')) return null;
               const point=window.__jevFast?.hitPoint(e);
               if (!point) return null;

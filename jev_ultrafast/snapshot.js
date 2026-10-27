@@ -57,6 +57,25 @@
         .some(id=>name(document.getElementById(id)).trim());
     return Boolean(labeled && cache.hitPoint(e));
   };
+  cache.comboboxOpen=e=>{
+    if (!e?.isConnected || e.tagName!=='INPUT' || e.getAttribute('role')!=='combobox' ||
+        e.getAttribute('aria-expanded')!=='false' || !safe(e) || !visible(e) || e.readOnly ||
+        e.getAttribute('aria-readonly')==='true' || e.closest(':disabled,[aria-disabled="true"]') ||
+        cache.hitPoint(e)) return null;
+    for (let p=e.parentElement,depth=0; p && p!==document.body && depth<2; p=p.parentElement,depth++) {
+      if (!visible(p) || p.matches('form,fieldset,dialog,[role="dialog"],'+selector)) return null;
+      const controls=[...p.querySelectorAll(selector)];
+      if (controls.length!==1 || controls[0]!==e ||
+          [...p.querySelectorAll('[role="img"]')].some(cache.clickableIcon)) return null;
+      const displays=[...p.children].filter(child=>!child.contains(e) && visible(child) && child.innerText?.trim());
+      if (!displays.length) continue;
+      if (displays.length!==1) return null;
+      const display=displays[0], text=display.innerText.trim(), point=cache.hitPoint(display);
+      if (!point || text.length>400) return null;
+      return {container:identity(p),display:identity(display),text,point};
+    }
+    return null;
+  };
   cache.context = (e,readText=p=>p.innerText||'') => {
     const own=name(e).replace(/\s+/g,' ').trim();
     for (let p=e, depth=0; p && p!==document.body && depth<4; p=p.parentElement, depth++) {
@@ -108,13 +127,15 @@
     if (!e?.isConnected || !visible(e)) return null;
     const scope=e.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"]') || e.parentElement;
     const form=e.form || e.closest('form');
+    const opening=cache.comboboxOpen(e);
     return [identity(e),role(e),name(e),cache.fieldValue(e),e.checked??null,e.selectedIndex??null,
       e.readOnly??null,e.matches(':disabled'),e.getAttribute('aria-disabled'),
       e.getAttribute('aria-expanded'),e.getAttribute('aria-checked'),e.getAttribute('aria-selected'),
       e.getAttribute('href'),scope ? identity(scope) : null,
       form ? [identity(form),form.action,form.method] : null,
       e.getAttribute('type'),e.getAttribute('name'),e.getAttribute('autocomplete'),descriptions(e),
-      cache.guardText(scope,e),cache.context(e,p=>cache.guardText(p,e))];
+      cache.guardText(scope,e),cache.context(e,p=>cache.guardText(p,e)),
+      opening ? [opening.container,opening.display,opening.text] : null];
   };
   cache.escapeTarget=()=>{
     const overlays=[...document.querySelectorAll('dialog[open],[role="dialog"],[role="menu"]')]
@@ -140,8 +161,9 @@
   const actions=[];
   for (const e of document.querySelectorAll(selector+',[role="img"]')) {
     if (!safe(e) || !visible(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"]')) continue;
-    const r=e.getBoundingClientRect(), rname=role(e);
-    if (!rname || !cache.hitPoint(e)) continue;
+    const rname=role(e), point=cache.hitPoint(e), opening=point ? null : cache.comboboxOpen(e);
+    if (!rname || (!point && !opening)) continue;
+    const r=(opening ? cache.nodes.get(opening.container) : e).getBoundingClientRect();
     if (rname==='gridcell' && e.querySelector('button,[role="button"]')) continue;
     const base={node:identity(e),role:rname,label:name(e)||rname,
       rect:{x:r.x,y:r.y,w:r.width,h:r.height}};
@@ -153,6 +175,11 @@
       if (value!==null) base[key]=value;
     }
     if (['checkbox','radio'].includes(e.type)) base.checked=String(e.checked);
+    if (opening) {
+      actions.push({...base,kind:'click',label:'Open '+(name(e)||opening.text),value:opening.text,
+        open_node:opening.container,open_display:opening.display});
+      continue;
+    }
     if (e.tagName==='SELECT') {
       for (const o of e.options) if (!o.selected && !o.disabled && !o.closest('optgroup[disabled]'))
         actions.push({...base,kind:'select',value:o.value,

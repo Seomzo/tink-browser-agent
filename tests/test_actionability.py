@@ -318,6 +318,107 @@ def test_icon_eligibility_is_rechecked_before_any_input(browser, change, direct_
     assert browser.evaluate("window.filters || 0") == 0
 
 
+COMBOBOX_HTML = """<style>
+#value-container{position:relative;display:grid;align-items:center;width:240px;height:40px}
+#input-container{grid-area:1/1;width:2.46px;height:24px}
+#combo{box-sizing:border-box;width:2.46px;height:24px;margin:0;padding:0;border:0;opacity:1}
+#selected-value{grid-area:1/1;z-index:2;width:220px;height:30px;background:white}
+</style><div id="group"><div id="value-container" onmousedown="
+ if(document.querySelector('#combo').getAttribute('aria-expanded')==='false'){
+   window.opens=(window.opens||0)+1;
+   document.querySelector('#combo').setAttribute('aria-expanded','true');
+   document.querySelector('#selected-value').style.display='none';
+   document.querySelector('#combo').style.width='220px';
+   document.querySelector('#input-container').style.width='220px';
+   document.querySelector('#choices').hidden=false;
+ }">
+ <div id="selected-value">Black Flags</div><div id="input-container">
+  <input id="combo" role="combobox" aria-haspopup="true" aria-expanded="false"
+   oninput="window.fills=(window.fills||0)+1">
+ </div></div></div>
+<div id="choices" role="listbox" hidden><div role="option" onclick="window.chosen='Closed'">Closed</div></div>
+<div id="cover" style="position:fixed;inset:0;z-index:100;background:white" hidden></div>"""
+
+
+def test_composite_combobox_opens_observed_value_without_filling_covered_input(browser):
+    browser.evaluate("document.body.innerHTML=" + json.dumps(COMBOBOX_HTML))
+    page = browser.observe(screenshot=False)
+    action = next(a for a in page["actions"] if a.get("open_node"))
+    assert (action["kind"], action["label"], action["value"]) == ("click", "Open Black Flags", "Black Flags")
+    assert not any(a["kind"] == "fill" for a in page["actions"])
+    assert browser.evaluate("window.__jevFast.hitPoint(document.querySelector('#combo'))") is None
+    assert browser.evaluate(f"window.__jevFast.nodes.get({action['open_node']}).id") == "value-container"
+    assert browser.evaluate(f"window.__jevFast.nodes.get({action['open_display']}).id") == "selected-value"
+    browser.act(action, page)
+    assert browser.evaluate("window.opens") == 1
+    assert browser.evaluate("window.fills || 0") == 0
+    opened = browser.observe(screenshot=False)
+    assert any(a["kind"] == "fill" and a["node"] == action["node"] for a in opened["actions"])
+    option = next(a for a in opened["actions"] if a["label"] == "Closed")
+    browser.act(option, opened)
+    assert browser.evaluate("window.chosen") == "Closed"
+
+
+@pytest.mark.parametrize("change", [
+    "document.querySelector('#value-container').append(document.createElement('input'))",
+    "const other=document.createElement('input');other.setAttribute('role','combobox');"
+    "document.querySelector('#value-container').append(other)",
+    "document.querySelector('#value-container').insertAdjacentHTML('beforeend','<button>Clear</button>')",
+    "document.querySelector('#value-container').insertAdjacentHTML('beforeend',"
+    "'<span role=img aria-label=Clear style=cursor:pointer>Clear</span>')",
+    "document.querySelector('#cover').hidden=false",
+    "document.querySelector('#combo').readOnly=true",
+    "document.querySelector('#combo').style.opacity='0'",
+    "document.querySelector('#group').setAttribute('aria-disabled','true')",
+    "document.querySelector('#value-container').insertAdjacentHTML('beforeend','<div>Other value</div>')",
+])
+def test_ambiguous_or_non_actionable_composite_combobox_is_not_exposed(browser, change):
+    browser.evaluate("document.body.innerHTML=" + json.dumps(COMBOBOX_HTML))
+    browser.evaluate(change)
+    page = browser.observe(screenshot=False)
+    assert not any(a.get("open_node") for a in page["actions"])
+
+
+@pytest.mark.parametrize("change", [
+    "document.querySelector('#cover').hidden=false",
+    "document.querySelector('#combo').outerHTML=document.querySelector('#combo').outerHTML",
+    "const old=document.querySelector('#value-container'), replacement=old.cloneNode(false);"
+    "replacement.append(...old.childNodes); old.replaceWith(replacement)",
+    "document.querySelector('#selected-value').outerHTML=document.querySelector('#selected-value').outerHTML",
+    "document.querySelector('#value-container').append(document.createElement('input'))",
+    "document.querySelector('#value-container').insertAdjacentHTML('beforeend','<button>Clear</button>')",
+    "document.querySelector('#combo').readOnly=true",
+    "document.querySelector('#group').setAttribute('aria-disabled','true')",
+])
+@pytest.mark.parametrize("direct_executor", [False, True])
+def test_composite_combobox_binding_is_rechecked_before_input(browser, change, direct_executor):
+    from jev_ultrafast.browser import browser_operation
+
+    browser.evaluate("document.body.innerHTML=" + json.dumps(COMBOBOX_HTML))
+    page = browser.observe(screenshot=False)
+    action = next(a for a in page["actions"] if a.get("open_node"))
+    browser.evaluate(change)
+    assert not browser.fresh(page, action)
+    with pytest.raises(StalePage):
+        if direct_executor:
+            browser_operation({"operation": "act", "session": browser.session, "action": action},
+                              transport=browser._cdp)
+        else:
+            browser.act(action, page)
+    assert browser.evaluate("window.opens || 0") == 0
+    assert browser.evaluate("window.fills || 0") == 0
+
+
+def test_composite_combobox_selected_value_change_invalidates_decision(browser):
+    browser.evaluate("document.body.innerHTML=" + json.dumps(COMBOBOX_HTML))
+    page = browser.observe(screenshot=False)
+    action = next(a for a in page["actions"] if a.get("open_node"))
+    browser.evaluate("document.querySelector('#selected-value').textContent='Different filter'")
+    with pytest.raises(StalePage):
+        browser.act(action, page)
+    assert browser.evaluate("window.opens || 0") == 0
+
+
 @pytest.mark.parametrize("nested", [True, False])
 def test_card_link_uses_uncovered_point_without_clicking_a_nested_control(browser, nested):
     cover = '<button id="save" onclick="event.stopPropagation();window.saved=true">Save</button>'
