@@ -91,6 +91,7 @@ def test_resume_requires_live_session_without_launch(monkeypatch):
     protocol, _, _, bf, cf = setup_loop(monkeypatch)
     result = run_task(request(start_url=None), protocol, chrome_factory=cf, browser_factory=bf)
     assert result["stop_reason"] == "browser_session_missing"
+    assert "available_actions" not in result
     cf.assert_not_called()
 
 
@@ -129,6 +130,7 @@ def test_fill_approval_contains_generated_text_before_mutation(monkeypatch):
     browser.act.side_effect = act
     result = run_task(request(), protocol, chrome_factory=chrome_factory, browser_factory=browser_factory)
     assert result["status"] == "completed" and result["stop_reason"] == "model_done"
+    assert "available_actions" not in result
     assert result["outcome_verified"] is False
     assert result["step_count"] == 1 and result["evidence"][0]["title"] == "Search"
     assert result["usage"] == {"decision_calls": 2, "text_calls": 1, "input_tokens": 40, "output_tokens": 2,
@@ -189,6 +191,60 @@ def test_model_blocked_after_action_is_not_no_progress(monkeypatch):
     protocol, _, _, browser_factory, chrome_factory = setup_loop(monkeypatch, choices=("e1", "BLOCKED"))
     result = run_task(request(), protocol, chrome_factory=chrome_factory, browser_factory=browser_factory)
     assert result["stop_reason"] == "model_blocked"
+
+
+@pytest.mark.parametrize("reason,choices,max_steps,reject", [
+    ("model_blocked", ("BLOCKED",), 20, False),
+    ("no_progress", ("e1", "e1", "e1"), 20, False),
+    ("step_limit", ("e1", "e1"), 1, False),
+    ("decision_limit", ("e1", "e1"), 1, True),
+    ("action_unavailable", ("e1", "e1", "e1"), 20, True),
+])
+def test_blocked_handoff_lists_only_observed_control_descriptions(monkeypatch, reason, choices, max_steps, reject):
+    protocol, _, browser, bf, cf = setup_loop(monkeypatch, choices=choices, responses=(True,) * 4)
+    observed = browser.observe.return_value
+    observed["actions"] += [
+        {"id": "combo", "kind": "click", "role": "combobox", "label": "Open filter type",
+         "value": "PRIVATE SELECTED VALUE", "node": 2, "open_node": 3, "open_display": 4,
+         "selector": "PRIVATE SELECTOR", "context": "PRIVATE CONTEXT"},
+        {"id": "wait", "kind": "wait", "label": "Wait for the page to update"},
+    ]
+    if reject:
+        browser.act.side_effect = StalePage("Changed before input")
+    result = run_task(request(max_steps=max_steps), protocol, chrome_factory=cf, browser_factory=bf)
+    assert (result["status"], result["stop_reason"]) == ("blocked", reason)
+    assert result["available_actions"] == [
+        {"kind": "fill", "role": "textbox", "label": "Search"},
+        {"kind": "click", "role": "combobox", "label": "Open filter type"},
+        {"kind": "wait", "label": "Wait for the page to update"},
+    ]
+    assert "PRIVATE" not in json.dumps(result["available_actions"])
+
+
+def test_blocked_control_handoff_is_bounded_to_observed_fields(monkeypatch):
+    protocol, _, browser, bf, cf = setup_loop(monkeypatch, choices=("BLOCKED",))
+    browser.observe.return_value["actions"] = [
+        {"id": f"e{index}", "node": index, "kind": "click", "role": "button", "label": "L" * 300,
+         "value": "PRIVATE VALUE", "selector": "PRIVATE SELECTOR"}
+        for index in range(300)
+    ]
+    result = run_task(request(), protocol, chrome_factory=cf, browser_factory=bf)
+    assert result["stop_reason"] == "model_blocked"
+    assert result["available_actions"] == [{"kind": "click", "role": "button", "label": "L" * 200}] * 250
+
+
+def test_blocked_control_labels_use_existing_sensitive_value_redaction(monkeypatch):
+    protocol, _, browser, bf, cf = setup_loop(monkeypatch, choices=("e1", "BLOCKED"))
+    loop.field_text.return_value = ("click", {"model": "test", "latency_ms": 1, "usage": {"cost": 0}})
+    initial = page()
+    initial["actions"][0]["sensitive"] = True
+    final = {**page(), "fingerprint": "after-fill", "actions": [
+        {"id": "next", "node": 2, "kind": "click", "role": "button", "label": "Echo click"},
+    ]}
+    browser.observe.side_effect = [initial, final]
+    browser.wait_for_change.return_value = final
+    result = run_task(request(), protocol, chrome_factory=cf, browser_factory=bf)
+    assert result["available_actions"] == [{"kind": "click", "role": "button", "label": "Echo [redacted]"}]
 
 
 def test_protocol_rejects_wrong_approval_id_and_denies_by_default():
@@ -539,6 +595,7 @@ def test_agent_verification_is_bound_to_pending_tab_url_before_code_enters_goal(
     first = run_task(request(start_url=None, verification_handoff="agent"), protocol,
                      chrome_factory=cf, browser_factory=bf)
     assert first["stop_reason"] == "verification_required"
+    assert "available_actions" not in first
     assert chrome.session_data["pending_verifications"]["source"] == {
         key: first["verification"][key] for key in ("url", "requested_at")
     }

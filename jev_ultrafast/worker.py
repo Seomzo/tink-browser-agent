@@ -525,7 +525,7 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
         usage["cost_complete"] = False  # An interrupted/failed request may not have returned its usage.
     elapsed_ms = round((time.monotonic() - started) * 1000)
     approval_wait_ms = round(protocol.approval_wait_seconds * 1000)
-    return {"status": status, "stop_reason": reason, "summary": SUMMARIES[reason], "evidence": evidence,
+    result = {"status": status, "stop_reason": reason, "summary": SUMMARIES[reason], "evidence": evidence,
             "steps": steps, "step_count": len(steps), "usage": usage, "outcome_verified": False,
             "final_url": evidence[-1]["url"] if evidence else None,
             "elapsed_ms": elapsed_ms, "execution_ms": max(0, elapsed_ms - approval_wait_ms),
@@ -535,6 +535,15 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
             "downloads": downloads.files if downloads is not None else [],
             "approval_count": protocol.approval_count,
             "approval_wait_ms": approval_wait_ms}
+    if status == "blocked" and reason != "verification_required" and state.get("page"):
+        # Keep code-owned kinds/roles exact; snapshot redacts known sensitive label text.
+        result["available_actions"] = [
+            {key: (redacted[key] if key == "label" else action[key])[:200]
+             for key in ("kind", "role", "label") if isinstance(action.get(key), str)}
+            for action, redacted in zip(state["page"].get("actions", [])[:250],
+                                        agent.snapshot()["page"].get("actions", [])[:250])
+        ]
+    return result
 
 
 def main():
