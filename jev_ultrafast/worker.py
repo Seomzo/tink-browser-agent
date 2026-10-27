@@ -9,10 +9,12 @@ import signal
 import sys
 import threading
 import time
+from contextlib import ExitStack
 from urllib.parse import urlsplit
 
 from .agent import Agent
 from .browser import Browser, StalePage
+from .questions import VERIFICATION_REQUEST
 from .worker_browser import OwnedChrome, chrome_binary
 
 PROTOCOL_VERSION = 1
@@ -41,6 +43,18 @@ SUMMARIES = {
     "action_unavailable": "The same action was rejected three times without a page change. The page remains available.",
     "multiple_new_tabs": "The click opened multiple browser tabs. No tab was selected; inspect them before continuing.",
     "browser_closed": "The live browser session is closed. Saved site data was retained.",
+    "tabs_listed": "Open tabs in this Tink browser are listed. Use an observed tab_id to continue there.",
+    "verification_required": ("This tab needs a verification code. Retrieve it through authorized email access "
+                              "or ask the user, then resume this tab with verification_response. "
+                              "The browser remains open."),
+    "verification_not_requested": ("The selected page does not match a pending verification-code request. "
+                                   "No code was entered; inspect the current page before continuing."),
+    "download_failed": "A requested file download did not complete. Review partial evidence before retrying.",
+    "download_verification_failed": ("The downloaded file could not be verified. "
+                                     "It was not reported as a completed artifact."),
+    "download_cleanup_failed": ("The browser could not finish download cleanup. "
+                                "Review the files and browser before continuing."),
+    "downloads_cleaned": "Pending downloads from the stopped task were canceled. The browser remains open.",
 }
 
 
@@ -52,8 +66,10 @@ class Stopped(Exception):
 def validate_request(request):
     if not isinstance(request, dict) or request.get("type") != "start" or request.get("protocol_version") != 1:
         raise ValueError("invalid_request")
-    goal, url = request.get("goal"), request.get("start_url")
-    if not isinstance(goal, str) or not goal.strip() or len(goal) > 12000:
+    action = request.get("action", "run")
+    goal, url = request.get("goal", ""), request.get("start_url")
+    if (action not in {"run", "tabs"} or not isinstance(goal, str) or len(goal) > 12000
+            or (action == "run" and not goal.strip())):
         raise ValueError("invalid_request")
     if url is not None:
         if not isinstance(url, str) or len(url) > 4096:
@@ -69,8 +85,24 @@ def validate_request(request):
         raise ValueError("invalid_request")
     if type(timeout) not in {int, float} or not math.isfinite(timeout) or not 10 <= timeout <= 300:
         raise ValueError("invalid_request")
-    return {"goal": goal.strip(), "start_url": url, "max_steps": steps, "timeout_seconds": timeout,
-            "chrome_path": chrome_path}
+    tab_id, new_tab = request.get("tab_id"), request.get("new_tab", False)
+    response, handoff = request.get("verification_response"), request.get("verification_handoff", "human")
+    if (tab_id is not None and (not isinstance(tab_id, str) or not tab_id or len(tab_id) > 128)
+            or type(new_tab) is not bool or (new_tab and (url is None or tab_id is not None))
+            or handoff not in {"human", "agent"}
+            or (response is not None and (not isinstance(response, str) or not response.strip()
+                                         or len(response) > 500 or tab_id is None or url is not None))
+            or (action == "tabs" and (url is not None or tab_id is not None or new_tab or response is not None))):
+        raise ValueError("invalid_request")
+    return {"action": action, "goal": goal.strip(), "start_url": url, "max_steps": steps,
+            "timeout_seconds": timeout, "chrome_path": chrome_path, "tab_id": tab_id, "new_tab": new_tab,
+            "verification_response": response, "verification_handoff": handoff}
+
+
+def owned_tabs(chrome):
+    return [{"id": target["targetId"], "title": str(target.get("title", ""))[:500],
+             "url": str(target.get("url", ""))[:4096]}
+            for target in chrome.call("Target.getTargets")["targetInfos"] if target["type"] == "page"][:64]
 
 
 def read_message(stream):
@@ -240,6 +272,9 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
     started = time.monotonic()
     evidence, steps, seen = [], [], set()
     agent = None
+    downloads = None
+    tabs, current_tab_id, verification = [], None, None
+    verification_url = None
     status, reason = "error", "worker_error"
     persistent = bool(os.environ.get("TINK_BROWSER_SESSION_DIR"))
     session_reused, browser_session = False, None
@@ -255,6 +290,9 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
             protocol.emit("observation", **item)
 
     def before_action(action, page, text):
+        response = request.get("verification_response")
+        if response and text and response in text and page["url"] != verification_url:
+            raise Stopped("blocked", "verification_not_requested")
         if action.get("sensitive") and text:
             # Verify service credentials cannot be typed; mask only the login value in the proposal.
             if any(secret in text for secret in protocol.secrets):
@@ -272,7 +310,7 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
         chrome_args = {"binary": request.get("chrome_path")}
         if request["start_url"] is None:
             chrome_args["allow_launch"] = False
-        with chrome_factory(**chrome_args) as chrome:
+        with chrome_factory(**chrome_args) as chrome, ExitStack() as resources:
             def followed_target(target):
                 if persistent:
                     chrome.retain_target(target)
@@ -281,35 +319,113 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
             browser_args = {"transport": chrome.call, "on_target_changed": followed_target}
             if persistent:
                 browser_session = chrome.session_data["browser_session"]
-                target = chrome.session_data.get("target_id")
-                targets = chrome.call("Target.getTargets")["targetInfos"]
-                session_reused = any(t["targetId"] == target and t["type"] == "page" for t in targets)
+                tabs = owned_tabs(chrome)
+                if request.get("action") == "tabs":
+                    current_tab_id = chrome.session_data.get("target_id")
+                    raise Stopped("completed", "tabs_listed")
+                target = request.get("tab_id") or chrome.session_data.get("target_id")
+                session_reused = any(t["id"] == target for t in tabs)
+                if request.get("tab_id") and not session_reused:
+                    raise Stopped("blocked", "browser_target_closed")
+                if request.get("new_tab"):
+                    session_reused = False
                 if not session_reused:
                     if request["start_url"] is None:
                         raise Stopped("blocked", "browser_target_closed")
                     target = chrome.call("Target.createTarget", url="about:blank", background=True)["targetId"]
+                if target != chrome.session_data.get("target_id"):
                     chrome.retain_target(target)
                 browser_args.update(target=target, owns_target=False)
+                pending = chrome.session_data.get("pending_verifications", {})
+                pending = {tab: item for tab, item in pending.items()
+                           if any(t["id"] == tab for t in tabs) and isinstance(item, dict)
+                           and isinstance(item.get("url"), str)
+                           and type(item.get("requested_at")) in {int, float}} if isinstance(pending, dict) else {}
+                pending = dict(list(pending.items())[-64:])
+                if request["start_url"] is not None:
+                    pending.pop(target, None)
+                chrome.session_data["pending_verifications"] = pending
+                chrome._save_session()
+            if os.environ.get("TINK_BROWSER_DOWNLOAD_DIR"):
+                from .downloads import DownloadTracker
+
+                downloads = resources.enter_context(DownloadTracker(
+                    chrome, os.environ["TINK_BROWSER_DOWNLOAD_DIR"], check=protocol.check))
             browser = browser_factory(request["start_url"], **browser_args)
             try:
                 # Activate only this Tink browser's owned target; never a personal Chrome tab.
                 chrome.call("Target.activateTarget", targetId=browser.target)
                 agent = agent_factory(request["start_url"], request["goal"], browser=browser,
                                       before_action=before_action)
+                response = request.get("verification_response")
+                pending = chrome.session_data.get("pending_verifications", {}) if persistent else {}
+                challenge = pending.get(browser.target)
+                # Reattaching changes the viewport/focus; an existing SPA form can
+                # briefly disappear while it lays out. Keep the code out of model
+                # context until that same pending challenge is observable again.
+                if isinstance(challenge, dict):
+                    render_deadline = time.monotonic() + 1.5
+                    while (agent.state["page"]["url"] == challenge.get("url")
+                           and not agent.state["page"].get("authenticationRequired")
+                           and time.monotonic() < render_deadline):
+                        protocol.check()
+                        time.sleep(0.05)
+                        agent.state["page"] = browser.observe(screenshot=False)
+                matches = (isinstance(challenge, dict) and challenge.get("url") == agent.state["page"]["url"]
+                           and agent.state["page"].get("authenticationRequired"))
+                if challenge is not None and (response is not None or not matches):
+                    pending.pop(browser.target, None)
+                    chrome._save_session()
+                if response is not None:
+                    if not matches:
+                        observe(agent.state["page"])
+                        raise Stopped("blocked", "verification_not_requested")
+                    agent.state["goal"] += "\nVerification response supplied for this tab: " + response
+                    agent.sensitive_values.add(response)
+                    verification_url = agent.state["page"]["url"]
+
+                def require_verification(url=None):
+                    nonlocal verification
+                    verification = {"tab_id": browser.target, "url": url or agent.state["page"]["url"],
+                                    "requested_at": time.time()}
+                    if persistent:
+                        pending.pop(browser.target, None)
+                        while len(pending) >= 64:
+                            pending.pop(next(iter(pending)))
+                        pending[browser.target] = {key: verification[key] for key in ("url", "requested_at")}
+                        chrome._save_session()
+                    raise Stopped("blocked", "verification_required")
+
                 protocol.emit("started", browser="owned_chrome", persistent_session=persistent,
                               session_reused=session_reused, browser_session=browser_session)
                 observe(agent.state["page"])
-                handoff_used = False
+                handoff_used = response is not None
+                requesting_code = False
                 while True:
                     protocol.check()
+                    if response is not None and (agent.state["page"]["url"] != verification_url
+                                                 or not agent.state["page"].get("authenticationRequired")):
+                        agent.state["goal"] = request["goal"]
+                        if agent.state["page"].get("authenticationRequired"):
+                            raise Stopped("blocked", "verification_not_requested")
+                        response = None
                     if agent.state["page"].get("authenticationRequired") and not handoff_used:
-                        handoff_used = True
-                        answer = protocol.human_input(agent.state["page"]["url"])
-                        agent.state["page"] = browser.observe(screenshot=False)
-                        observe(agent.state["page"])
-                        if answer.lower() != "continue":
-                            agent.state["goal"] += "\nUser-provided verification response: " + answer
-                        agent.state["status"] = "ready"
+                        if request.get("verification_handoff") == "agent":
+                            if not matches:
+                                require_verification()
+                            # A same-challenge follow-up gets one supervised decision to
+                            # request a new code. Jev judges intent from the goal and
+                            # observed control; no site labels or goal regex are assumed.
+                            requesting_code = True
+                            agent.state["goal"] = request["goal"] + "\n\n" + VERIFICATION_REQUEST
+                        else:
+                            handoff_used = True
+                            answer = protocol.human_input(agent.state["page"]["url"])
+                            agent.state["page"] = browser.observe(screenshot=False)
+                            observe(agent.state["page"])
+                            if answer.lower() != "continue":
+                                agent.state["goal"] += "\nUser-provided verification response: " + answer
+                            agent.state["status"] = "ready"
                     if len(agent.state["decisions"]) >= request["max_steps"] * 2:
                         raise Stopped("blocked", "decision_limit")
                     agent.command("predict")
@@ -318,6 +434,15 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
                             and agent.state["decision"]["choice"] not in {"DONE", "BLOCKED"}):
                         raise Stopped("blocked", "step_limit")
                     selected = agent.state["decision"]["choice"]
+                    if requesting_code:
+                        page = agent.state["page"]
+                        action = next((a for a in page["actions"] if a["id"] == selected), None)
+                        if page["url"] != challenge["url"]:
+                            pending.pop(browser.target, None)
+                            chrome._save_session()
+                            raise Stopped("blocked", "verification_not_requested")
+                        if not page.get("authenticationRequired") or not action or action["kind"] != "click":
+                            require_verification(challenge["url"])
                     previous_actions = len(agent.state["history"])
                     try:
                         agent.command("act", {"fingerprint": agent.state["page"]["fingerprint"]})
@@ -343,7 +468,19 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
                         steps.append(step)
                         protocol.emit("step", **step)
                     observe(agent.state["page"])
+                    if requesting_code:
+                        # Even a stale action ends this attempt; never replay a resend
+                        # or let the worker submit a form while the new code is absent.
+                        if agent.state["page"]["url"] != challenge["url"]:
+                            pending.pop(browser.target, None)
+                            chrome._save_session()
+                            raise Stopped("blocked", "verification_not_requested")
+                        require_verification(challenge["url"])
+                    if downloads is not None:
+                        downloads.poll()
                     if agent.state["status"] == "done":
+                        if downloads is not None:
+                            downloads.wait()
                         status, reason = "completed", "model_done"
                         break
                     if agent.state["status"] == "blocked":
@@ -352,6 +489,12 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
             finally:
                 # Do not let a second watchdog signal interrupt cleanup after the loop has stopped.
                 protocol.finished.set()
+                current_tab_id = browser.target
+                if persistent:
+                    try:
+                        tabs = owned_tabs(chrome)
+                    except Exception:
+                        pass  # Preserve the task result if Chrome disappeared during cancellation.
                 try:
                     browser.close()
                 except Exception:
@@ -364,6 +507,8 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
         if str(error) in {"browser_session_missing", "browser_profile_busy", "browser_target_closed",
                           "browser_session_unavailable", "multiple_new_tabs"}:
             status, reason = "blocked", str(error)
+        elif str(error) in {"download_failed", "download_verification_failed", "download_cleanup_failed"}:
+            status, reason = "error", str(error)
     except Exception:
         # Browser/provider exceptions may include URLs, page text, or credentials.
         status, reason = "error", "worker_error"
@@ -382,6 +527,8 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
             "elapsed_ms": elapsed_ms, "execution_ms": max(0, elapsed_ms - approval_wait_ms),
             "persistent_session": persistent, "session_reused": session_reused,
             "browser_session": browser_session, "rejected_decisions": rejected_decisions,
+            "tabs": tabs, "current_tab_id": current_tab_id, "verification": verification,
+            "downloads": downloads.files if downloads is not None else [],
             "approval_count": protocol.approval_count,
             "approval_wait_ms": approval_wait_ms}
 
@@ -391,6 +538,7 @@ def main():
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--chrome-path")
     parser.add_argument("--close-browser", action="store_true")
+    parser.add_argument("--cleanup-downloads", action="store_true")
     args = parser.parse_args()
     protocol = Protocol(sys.stdin, sys.stdout)
     if args.self_test:
@@ -401,14 +549,15 @@ def main():
         protocol.emit("self_test", worker="tink_browser", version="1", available=True, ready=True,
                       chrome_available=binary is not None, chrome_path=binary,
                       platform_supported=sys.platform != "win32", supervised_actions=True, persistent_session=True,
-                      approval_wait_budget=True, popup_following=True)
+                      approval_wait_budget=True, popup_following=True, workflow_support=True)
         return
-    if args.close_browser:
-        status, reason = "completed", "browser_closed"
+    if args.close_browser or args.cleanup_downloads:
+        status, reason = "completed", "browser_closed" if args.close_browser else "downloads_cleaned"
         try:
             if os.environ.get("TINK_BROWSER_SESSION_DIR"):
                 with OwnedChrome(binary=args.chrome_path, allow_launch=False) as chrome:
-                    chrome.shutdown()
+                    if args.close_browser:
+                        chrome.shutdown()
         except RuntimeError as error:
             if str(error) != "browser_session_missing":
                 status, reason = "blocked", str(error) if str(error) in SUMMARIES else "worker_error"

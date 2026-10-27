@@ -43,6 +43,6 @@ jobs:
           TINK_BROWSER_HEADLESS: "1"
         run: |
           google-chrome --version
-          uv run --no-sync pytest -q tests/test_worker_chrome.py tests/test_actionability.py
+          uv run --no-sync pytest -q tests/test_worker_chrome.py tests/test_actionability.py tests/test_downloads.py tests/test_download_recovery.py
       - name: Build distribution
         run: uv build

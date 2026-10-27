@@ -55,7 +55,7 @@ def setup_loop(monkeypatch, choices=("e1", "DONE"), responses=(True, True)):
     protocol = Protocol(io.StringIO(), output)
     for index, allow in enumerate(responses, 1):
         protocol.messages.put({"type": "action_response", "id": str(index), "allow": allow})
-    browser = Mock(observe=Mock(return_value=page()), fresh=Mock(return_value=True),
+    browser = Mock(target="source", observe=Mock(return_value=page()), fresh=Mock(return_value=True),
                    wait_for_change=Mock(return_value=page()))
     chrome = Mock()
     chrome.__enter__ = Mock(return_value=chrome)
@@ -404,6 +404,7 @@ def test_self_test_is_offline_and_accepts_custom_chrome_path(tmp_path):
     assert report["chrome_available"] is False
     assert report["chrome_path"] is None
     assert report["approval_wait_budget"] is True and report["popup_following"] is True
+    assert report["workflow_support"] is True
 
 
 def test_worker_import_does_not_load_harness_or_its_workspace_env():
@@ -485,6 +486,8 @@ def test_persistent_chrome_temp_path_preserves_session_ownership(monkeypatch, tm
         session = session.resolve()
         assert chrome.session_data["profile_dir"] == str(session / "browser-data")
         assert f"--user-data-dir={session / 'browser-data'}" in launch.call_args.args[0]
+        assert not {"--disable-sync", "--disable-background-networking", "--disable-component-update",
+                    "--password-store=basic"}.intersection(launch.call_args.args[0])
         assert launch.call_args.kwargs["cwd"] == session
         assert launch.call_args.kwargs["start_new_session"] is True
         environment = launch.call_args.kwargs["env"]
@@ -514,6 +517,109 @@ def test_verification_handoff_continues_same_browser(monkeypatch):
     assert cf.call_count == 1 and bf.call_count == 1
     assert output.getvalue().count('"type": "human_required"') == 1
     assert '123456' in loop.choose.call_args.args[1]
+
+
+def test_agent_verification_is_bound_to_pending_tab_url_before_code_enters_goal(monkeypatch):
+    monkeypatch.setenv("TINK_BROWSER_SESSION_DIR", "/owned/session")
+    protocol, _, browser, bf, cf = setup_loop(monkeypatch)
+    chrome = cf.return_value
+    chrome.session_data = {"browser_session": "owned", "target_id": "source"}
+    chrome.call.return_value = {"targetInfos": [{"targetId": "source", "type": "page"}]}
+    browser.observe.return_value["authenticationRequired"] = True
+    first = run_task(request(start_url=None, verification_handoff="agent"), protocol,
+                     chrome_factory=cf, browser_factory=bf)
+    assert first["stop_reason"] == "verification_required"
+    assert chrome.session_data["pending_verifications"]["source"] == {
+        key: first["verification"][key] for key in ("url", "requested_at")
+    }
+    browser.observe.return_value["url"] = "https://different.example.test/verify"
+    protocol = Protocol(io.StringIO(), io.StringIO())
+    second = run_task(request(start_url=None, tab_id="source", verification_response="fixture-code"), protocol,
+                      chrome_factory=cf, browser_factory=bf)
+    assert second["stop_reason"] == "verification_not_requested"
+    browser.act.assert_not_called()
+    loop.choose.assert_not_called()
+    assert "fixture-code" not in json.dumps(chrome.session_data)
+    assert chrome.session_data["pending_verifications"] == {}
+
+
+def test_matching_verification_is_consumed_once_and_not_stored(monkeypatch):
+    monkeypatch.setenv("TINK_BROWSER_SESSION_DIR", "/owned/session")
+    protocol, _, browser, bf, cf = setup_loop(monkeypatch, choices=("DONE",))
+    chrome = cf.return_value
+    chrome.session_data = {"browser_session": "owned", "target_id": "source",
+                          "pending_verifications": {"source": {"url": page()["url"], "requested_at": 1}}}
+    chrome.call.return_value = {"targetInfos": [{"targetId": "source", "type": "page"}]}
+    browser.observe.return_value["authenticationRequired"] = True
+    result = run_task(request(start_url=None, tab_id="source", verification_response="fixture-code"), protocol,
+                      chrome_factory=cf, browser_factory=bf)
+    assert result["status"] == "completed"
+    assert "fixture-code" in loop.choose.call_args.args[1]
+    assert chrome.session_data["pending_verifications"] == {}
+    assert "fixture-code" not in json.dumps(chrome.session_data)
+    again = run_task(request(start_url=None, tab_id="source", verification_response="fixture-code"), protocol,
+                     chrome_factory=cf, browser_factory=bf)
+    assert again["stop_reason"] == "verification_not_requested"
+    assert loop.choose.call_count == 1
+
+
+@pytest.mark.parametrize("changed_origin", [False, True])
+def test_verification_resume_waits_for_existing_form_to_render(monkeypatch, changed_origin):
+    monkeypatch.setenv("TINK_BROWSER_SESSION_DIR", "/owned/session")
+    protocol, _, browser, bf, cf = setup_loop(monkeypatch, choices=("DONE",))
+    chrome = cf.return_value
+    chrome.session_data = {"browser_session": "owned", "target_id": "source",
+                          "pending_verifications": {"source": {"url": page()["url"], "requested_at": 1}}}
+    chrome.call.return_value = {"targetInfos": [{"targetId": "source", "type": "page"}]}
+    loading = {**page(), "text": "Authentication", "actions": []}
+    ready = {**page(), "authenticationRequired": True}
+    if changed_origin:
+        ready["url"] = "https://different.example.test/verify"
+    browser.observe.side_effect = [loading, loading, ready]
+    result = run_task(request(start_url=None, tab_id="source", verification_response="fixture-code"), protocol,
+                      chrome_factory=cf, browser_factory=bf)
+    assert browser.observe.call_count == 3
+    browser.act.assert_not_called()
+    if changed_origin:
+        assert result["stop_reason"] == "verification_not_requested"
+        loop.choose.assert_not_called()
+    else:
+        assert result["status"] == "completed"
+        assert "fixture-code" in loop.choose.call_args.args[1]
+    assert "fixture-code" not in json.dumps(chrome.session_data)
+
+
+def test_verification_cannot_follow_a_stale_retry_to_another_authentication_page(monkeypatch):
+    monkeypatch.setenv("TINK_BROWSER_SESSION_DIR", "/owned/session")
+    protocol, _, browser, bf, cf = setup_loop(monkeypatch, responses=(True,))
+    chrome = cf.return_value
+    chrome.session_data = {"browser_session": "owned", "target_id": "source",
+                          "pending_verifications": {"source": {"url": page()["url"], "requested_at": 1}}}
+    chrome.call.return_value = {"targetInfos": [{"targetId": "source", "type": "page"}]}
+    first = {**page(), "authenticationRequired": True}
+    redirected = {**first, "url": "https://different.example.test/verify", "fingerprint": "changed"}
+    browser.observe.side_effect = [first, redirected]
+    browser.act.side_effect = StalePage("navigation during approval")
+    result = run_task(request(start_url=None, tab_id="source", verification_response="fixture-code"), protocol,
+                      chrome_factory=cf, browser_factory=bf)
+    assert result["stop_reason"] == "verification_not_requested"
+    assert result["step_count"] == 0
+    assert loop.choose.call_count == 1
+    assert browser.act.call_count == 1  # Rejected before mutation; never retried on the new page.
+
+
+@pytest.mark.parametrize("navigation", [True, False])
+def test_navigation_or_resolved_auth_clears_pending_verification(monkeypatch, navigation):
+    monkeypatch.setenv("TINK_BROWSER_SESSION_DIR", "/owned/session")
+    protocol, _, browser, bf, cf = setup_loop(monkeypatch, choices=("DONE",))
+    chrome = cf.return_value
+    chrome.session_data = {"browser_session": "owned", "target_id": "source",
+                          "pending_verifications": {"source": {"url": page()["url"], "requested_at": 1}}}
+    chrome.call.return_value = {"targetInfos": [{"targetId": "source", "type": "page"}]}
+    result = run_task(request(start_url=page()["url"] if navigation else None), protocol,
+                      chrome_factory=cf, browser_factory=bf)
+    assert result["status"] == "completed"
+    assert chrome.session_data["pending_verifications"] == {}
 
 
 def test_persistent_process_identity_uses_launch_nonce_not_wrapper_path(monkeypatch, tmp_path):

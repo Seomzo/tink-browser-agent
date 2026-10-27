@@ -47,7 +47,7 @@ The final result contains `status` (`completed`, `blocked`, `denied`, `cancelled
 `timeout`, or `error`), `stop_reason`, `summary`, `evidence`, `steps`, `step_count`,
 `final_url`, `elapsed_ms`, `execution_ms`, `approval_wait_ms`, `approval_count`,
 `usage`, and `outcome_verified: false`. `execution_ms` excludes approval waiting;
-the existing bounded MFA handoff remains included. `approval_count` excludes the
+the optional legacy human-input handoff remains included. `approval_count` excludes the
 exact initial URL proposal automatically approved by Tink; its brief round-trip
 still counts toward waiting time. Evidence is bounded
 visible page text with a source URL/title, retained across observations. Completion
@@ -58,6 +58,12 @@ live-session continuity. `rejected_decisions` counts actions rejected before
 execution. Three consecutive rejections of the same choice on an unchanged page
 return `blocked` with `stop_reason: action_unavailable`; submitted actions are
 never replayed.
+
+Results also include observed `tabs`, `current_tab_id`, a pending `verification`
+record when a code is needed, and completed `downloads`. A download entry contains
+`path`, friendly `name`, `source_url`, `bytes`, and `sha256`. A verified file is
+evidence of file delivery, not independent proof that the requested report or
+records are correct; `outcome_verified` remains false.
 
 `--self-test` checks imports, protocol and Chrome availability without opening a
 browser or making an API call. `--chrome-path /path/to/executable` overrides Chrome
@@ -70,15 +76,29 @@ workers before relying on separate approval timing or click-opened tabs.
 
 Each task controls an owned Chrome tab. The host can retain the live browser
 between calls within its Tink profile; otherwise Chrome is disposable.
-Downloads are disabled. Explicit browser close flushes saved site data.
+Explicit browser close flushes saved site data. Downloads are enabled only within
+a host-configured task scope, as described below.
 This release supports macOS and Linux. After an approved click, the worker can
 follow one newly opened page whose CDP opener is the controlled tab. It excludes
 preexisting and unrelated tabs, checks for up to one second, and gives a found
 tab 100 ms for siblings to appear before selecting it. Multiple matching tabs
 return `blocked` / `multiple_new_tabs`; no click is replayed. The original tab
-stays open and the new target becomes the profile's retained tab. Tabs opened
-after this bounded check, missing opener relationships, switching back, frames,
-shadow roots, and uploads remain unsupported.
+stays open and the new target becomes the profile's retained tab. A host can also
+list owned tabs and explicitly choose an observed target. The bounded automatic
+popup check does not handle late tabs or missing opener relationships by guessing.
+Frames, shadow roots, uploads and native browser/OS dialogs remain unsupported.
+
+Snapshots include bounded nearby visible text and observed HTTP(S) link
+destinations to distinguish repeated labels. Snapshot inclusion and execution
+share the same click-point resolver: it may choose an uncovered point on a card,
+but never a nested interactive control. Guard identities and context are rechecked
+after approval.
+
+Keyboard support is limited to observed Escape for a visible page dialog/menu and
+Enter for a supported focused input. Back is bound to the observed current and
+previous browser-history entries. Changed focus, overlay, DOM identity or history
+invalidates the action before input. This does not add arbitrary keys, selectors,
+native password-manager unlocks, or full computer control.
 
 This is the attributed Jev fork with MIT notices preserved. It is not the original
 Tink rewrite, a locally trained model, a Laya speedup, or full computer control.
@@ -121,8 +141,9 @@ Empty initial pages get a bounded rendering wait. Before accepting BLOCKED, the
 worker waits briefly for a changed observation and re-plans if the page changed.
 It does not replay submitted actions. Live sessions and verification handoff are
 described below. CAPTCHA, frames, and
-multi-window SSO are not covered by password-field support. Following an ordinary
-click-opened tab does not provide an SSO window-switching flow.
+native browser or OS authentication prompts are not covered by password-field
+support. Owned-tab selection enables an email-code round trip, but does not
+guarantee arbitrary SSO flows or Gmail accessibility.
 
 Local desktop validation (2026-09-23): the patched worker filled the username,
 clicked Next, filled the password, and clicked Login on Tekion. Captured evidence
@@ -151,6 +172,14 @@ sessions stay live. `DONE`, `BLOCKED`, denial, timeout, and cancellation disconn
 only the task. Chrome also survives host backend restart and app quit until it is
 explicitly closed or the user quits Chrome. Site sessions can still expire.
 
+For persistent sessions, the host can send `action: "tabs"` to obtain the owned
+browser's page IDs, titles and URLs without model inference. A run may use an
+observed `tab_id` to resume that exact page. Alternatively, `new_tab: true` with
+`start_url` opens a separate tab and preserves the previous page. `new_tab` and
+`tab_id` cannot be combined. Only pages in this owned Chrome session are eligible;
+an absent target is rejected rather than replaced with a guessed tab. A task still
+starts with a fresh Agent, so the host must supply the goal and relevant context.
+
 Resume without a live browser returns `browser_session_missing`; a user-closed
 tab returns `browser_target_closed`. Supplying a URL can start a new browser or
 tab, with `session_reused: false`. On macOS, closing every window can leave Chrome
@@ -169,13 +198,74 @@ site data. Without `TINK_BROWSER_SESSION_DIR`, the original disposable lifetime
 remains; `TINK_BROWSER_PROFILE_DIR` alone saves disk data but closes Chrome after
 each task.
 
-Recognized verification-code screens emit one `human_required` event per task.
-The host shows its normal user-input prompt and returns `human_response` with
-`answer`: Continue after manual verification, a supplied code, or Cancel. The
-worker holds the same Chrome process and makes no model calls while waiting.
-Both host and worker deadlines receive a bounded 180-second handoff allowance.
-Missing callbacks, cancellation, EOF, and deadline expiry terminate the task.
-The flow does not configure email access or bypass CAPTCHA/MFA.
+Tink uses `verification_handoff: "agent"`. A recognized verification-code page
+returns `blocked` / `verification_required` with its tab ID, URL and request time.
+The worker ends the bounded task while retaining the live session. The central
+agent can read a fresh code through authorized email access in another owned tab
+or an existing email connection, or ask the user. It resumes the pending tab using
+`tab_id` and `verification_response`, without `start_url`. A response is checked
+against the pending verification page and consumed for that continuation; it must
+not be guessed, reused for another page, or treated as a permanent credential.
+This removes the blocking human prompt from Tink's email-code round trip.
+
+Direct clients may still choose `verification_handoff: "human"` (the protocol
+default). That mode emits one `human_required` event per task and waits for
+`human_response` with Continue, a code, or Cancel. It holds the session without
+model calls and has a bounded 180-second allowance. Tink does not use this mode
+for automated email retrieval. Neither mode configures Gmail access or bypasses
+CAPTCHA/MFA, and iframe-based code fields remain unsupported.
+
+## Manual browser sign-in
+
+`python -I -m jev_ultrafast.browser_setup` opens normal visible Chrome with the
+same host-owned profile. It first closes an idle automated session while retaining
+the profile leases. The manual window has no remote-debugging endpoint, headless
+flag, disabled-sync flag or basic password-store override. The user signs into
+Chrome and their sites using Chrome's normal account and password-manager UI.
+
+The helper reports `running`, `idle`, `busy` or `error`; `--status` only checks
+setup state. `idle` means the setup browser is closed, not that any account is
+signed in. The helper keeps exclusive ownership while normal Chrome is open,
+including across a host restart; automation resumes after the user quits that
+Chrome instance. If ownership cannot be verified, it fails closed.
+
+In Tink desktop, use Settings → Advanced → **Set up browser sign-in…**, sign into
+Chrome if wanted, separately confirm Gmail and the intended site account, then
+quit the setup browser. Chrome sync, OS keychain unlocks, Touch ID and account
+consent remain under the user's control. This is not a Gmail OAuth integration,
+an exported password vault, or access to the user's everyday Chrome profile.
+
+## Report downloads
+
+The host supplies `TINK_BROWSER_DOWNLOAD_DIR` under the selected profile. Each
+task gets a private subdirectory. Chrome saves files using its download IDs so
+duplicate names cannot overwrite one another; the manifest retains the suggested
+human-readable name separately. Approved page actions may initiate a download;
+the model cannot supply a filesystem path or execute the downloaded file.
+
+The tracker consumes Chrome download events, waits for in-flight transfers before
+model completion within the task deadline, and verifies a regular contained file,
+its received byte count and SHA-256. Symlinks, traversal, incomplete/cancelled files
+and inconsistent sizes do not enter the completed manifest. The Tink host checks
+containment, size and hash again before exposing the path to the central agent.
+Task cleanup disables further automated downloads and cancels active transfers.
+Failure reasons distinguish `download_failed`, `download_verification_failed`
+and `download_cleanup_failed`; partial page evidence is retained where available.
+
+A page label such as “Download complete” is not proof of file delivery. Browser
+print/save dialogs, uploads, frame-only controls and downloads that begin outside
+the bounded task remain outside this capability. Completed report contents still
+need to be checked against the user's requested records.
+
+## Current controlled checks
+
+The workflow regression fixtures cover duplicated card labels and nested controls,
+stale keyboard/history actions, owned-tab selection, verification continuation,
+download completion and cancellation, and exclusive manual sign-in setup. These
+are local fixtures with mocked inference, not live Google/Tekion acceptance or a
+speed benchmark. Keep actual test execution counts, paid runs and live account
+outcomes in the release validation record rather than inferring them from fixture
+coverage. Native password-manager unlocks have not been automated.
 
 Offline clock tests cover approval waits longer than the execution budget,
 cumulative allowance exhaustion, explicit denial, cancellation, and late approval.

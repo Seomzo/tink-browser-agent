@@ -153,6 +153,9 @@ class Browser:
         return page
 
     def fresh(self, page, action=None):
+        if action is not None and action["kind"] == "back":
+            if back_action(self.call("Page.getNavigationHistory")) != action:
+                return False
         if action is not None and action["kind"] in {"click", "select"}:
             node = action["node"]
             if type(node) is not int:
@@ -194,6 +197,17 @@ def fingerprint(state):
     return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()
 
 
+def back_action(history):
+    index, entries = history["currentIndex"], history["entries"]
+    if index <= 0 or index >= len(entries):
+        return None
+    previous, current = entries[index - 1], entries[index]
+    return {"id": "back", "kind": "back", "role": "navigation",
+            "label": "Back to " + (previous.get("title") or previous["url"])[:200],
+            "entry_id": previous["id"], "current_entry_id": current["id"],
+            "url": previous["url"], "current_url": current["url"]}
+
+
 def browser_operation(request, *, transport=None):
     operation = request["operation"]
     session = request["session"]
@@ -214,6 +228,23 @@ def browser_operation(request, *, transport=None):
         kind = action["kind"]
         if kind == "scroll":
             call("Input.dispatchMouseEvent", type="mouseWheel", x=550, y=650, deltaX=0, deltaY=action["delta"])
+        elif kind == "back":
+            if back_action(call("Page.getNavigationHistory")) != action:
+                raise StalePage("Navigation history changed. Observe again.")
+            call("Page.navigateToHistoryEntry", entryId=action["entry_id"])
+        elif kind == "key":
+            if action.get("key") not in {"Enter", "Escape"} or type(action.get("node")) is not int:
+                raise ValueError("Invalid observed keyboard action")
+            allowed = evaluate("""(action => {
+              const cache=window.__jevFast;
+              return cache?.keyAllowed(cache.nodes.get(action.node),action.key) === true;
+            })(""" + json.dumps(action) + ")")
+            if allowed is not True:
+                raise StalePage("Keyboard target changed. Observe again.")
+            key = action["key"]
+            params = {"key": key, "code": key, "windowsVirtualKeyCode": 13 if key == "Enter" else 27}
+            call("Input.dispatchKeyEvent", type="keyDown", **params, **({"text": "\r"} if key == "Enter" else {}))
+            call("Input.dispatchKeyEvent", type="keyUp", **params)
         elif kind != "wait":
             if type(action["node"]) is not int:
                 raise ValueError("Invalid observed node")
@@ -223,9 +254,8 @@ def browser_operation(request, *, transport=None):
               if (!e?.isConnected || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]') ||
                   !e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) return null;
               if (action.kind==='fill' && (e.readOnly || e.getAttribute('aria-readonly')==='true')) return null;
-              const r=e.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2;
-              if (!r.width || !r.height || x<0 || y<0 || x>=innerWidth || y>=innerHeight) return null;
-              if (!e.contains(document.elementFromPoint(x,y))) return null;
+              const point=window.__jevFast?.hitPoint(e);
+              if (!point) return null;
               if (action.kind==='select') {
                 if (e.tagName!=='SELECT' || ![...e.options].some(o=>o.value===action.value &&
                     !o.disabled && !o.closest('optgroup[disabled]'))) return null;
@@ -233,7 +263,7 @@ def browser_operation(request, *, transport=None):
                 e.dispatchEvent(new Event('input',{bubbles:true}));
                 e.dispatchEvent(new Event('change',{bubbles:true}));
               }
-              return {x,y};
+              return point;
             })(""" + json.dumps(action) + ")")
             if target is None:
                 if kind == "select":
@@ -265,6 +295,9 @@ def browser_operation(request, *, transport=None):
     info = evaluate(READ_STATE)
     if info is None:
         raise StalePage("Document is navigating")
+    previous = back_action(call("Page.getNavigationHistory"))
+    if previous is not None:
+        info["actions"].append(previous)
     info["fingerprint"] = fingerprint(info)
     if request.get("screenshot", True):
         info["screenshot"] = call("Page.captureScreenshot", format="jpeg", quality=72)["data"]

@@ -140,6 +140,32 @@ def test_target_head_receives_control_state_and_full_next_step_rules(monkeypatch
     assert d["choice"] == "e3"
 
 
+def test_duplicate_labels_keep_their_own_context_and_destination_in_model_request(monkeypatch):
+    p = page()
+    p["actions"] = [
+        {"id": "ga", "kind": "click", "node": 1, "role": "link", "label": "Select Tickets",
+         "context": "2-Day GA Select Tickets", "href": "https://tickets.example.test/ga"},
+        {"id": "plus", "kind": "click", "node": 2, "role": "link", "label": "Select Tickets",
+         "context": "2-Day GA+ Select Tickets", "href": "https://tickets.example.test/ga-plus"},
+    ]
+
+    def post(_url, _key, body):
+        targets = body["questions"]["click_target"]["criteria"]
+        for element in body["state"]["elements"]:
+            target = targets[element["index"]]
+            assert (target["context"], target["href"]) == (element["context"], element["href"])
+        selected = next(index for index, target in targets.items() if target["context"] == "2-Day GA Select Tickets")
+        assert targets[selected]["href"] == "https://tickets.example.test/ga"
+        return {"model": "test", "answers": {
+            "operation": choice(body["questions"]["operation"]["criteria"], "CLICK"),
+            "click_target": choice(targets, selected),
+        }}
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", post)
+    assert model.choose(p, "Open GA tickets, not GA+", [])["choice"] == "ga"
+
+
 def test_quoted_task_text_still_uses_the_llm(monkeypatch):
     monkeypatch.setenv("TEXT_MODEL_API_KEY", "test")
     post = Mock(return_value={"choices": [{"message": {"content": '{"text":"Zurich"}'}}]})
@@ -235,12 +261,11 @@ def test_observation_is_one_atomic_browser_read(monkeypatch):
     import jev_ultrafast.browser as browser
 
     p = page()
-    cdp = Mock(return_value={"result": {"value": p}})
+    cdp = Mock(side_effect=[{"result": {"value": p}}, {"currentIndex": 0, "entries": []}])
     monkeypatch.setattr(browser, "cdp", cdp)
     actual = browser_operation({"operation": "observe", "session": "test", "screenshot": False})
     assert actual["actions"] == p["actions"]
-    assert cdp.call_count == 1
-    assert cdp.call_args.args[0] == "Runtime.evaluate"
+    assert [call.args[0] for call in cdp.call_args_list] == ["Runtime.evaluate", "Page.getNavigationHistory"]
 
 
 def test_executor_rejects_a_stale_page_before_browser_input(monkeypatch):

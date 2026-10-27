@@ -31,6 +31,22 @@ def chrome_binary(configured=None):
     raise RuntimeError("chrome_unavailable")
 
 
+def _wait_for_port_file(port_file, process_alive):
+    # Chrome can create/truncate this file before writing both endpoint records.
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        try:
+            lines = port_file.read_text().splitlines()
+        except FileNotFoundError:
+            lines = []
+        if len(lines) >= 2 and lines[0] and lines[1]:
+            return lines
+        if not process_alive():
+            raise RuntimeError("chrome_start_failed")
+        time.sleep(0.05)
+    raise RuntimeError("chrome_start_failed")
+
+
 class OwnedChrome:
     def __init__(self, binary=None, *, allow_launch=True):
         self.binary = binary
@@ -39,6 +55,7 @@ class OwnedChrome:
         self.process = None
         self.socket = None
         self.sequence = 0
+        self.on_event = None
         self.allow_launch = allow_launch
         self.persistent = bool(os.environ.get("TINK_BROWSER_SESSION_DIR"))
         self.session_data = {}
@@ -91,12 +108,7 @@ class OwnedChrome:
                 env=chrome_env,
             )
             port_file = profile_dir / "DevToolsActivePort"
-            deadline = time.monotonic() + 15
-            while not port_file.is_file():
-                if self.process.poll() is not None or time.monotonic() >= deadline:
-                    raise RuntimeError("chrome_start_failed")
-                time.sleep(0.05)
-            port, socket_path, *_ = port_file.read_text().splitlines()
+            port, socket_path, *_ = _wait_for_port_file(port_file, lambda: self.process.poll() is None)
             if not port.isdigit() or not socket_path.startswith("/devtools/browser/"):
                 raise RuntimeError("chrome_start_failed")
             self.socket = connect(
@@ -156,8 +168,7 @@ class OwnedChrome:
             args = [binary, f"--user-data-dir={self.profile_dir}", "--remote-debugging-port=0",
                     f"--tink-browser-session={browser_session}",
                     "--remote-debugging-address=127.0.0.1", "--no-first-run", "--no-default-browser-check",
-                    "--disable-sync", "--disable-extensions", "--disable-background-networking",
-                    "--disable-component-update", "--disable-default-apps", "--password-store=basic", "about:blank"]
+                    "--disable-extensions", "--disable-default-apps", "about:blank"]
             if os.environ.get("TINK_BROWSER_HEADLESS") == "1":
                 args.insert(1, "--headless=new")
             self.process = subprocess.Popen(
@@ -212,12 +223,7 @@ class OwnedChrome:
 
     def _connect_persistent(self):
         port_file = self.profile_dir / "DevToolsActivePort"
-        deadline = time.monotonic() + 15
-        while not port_file.is_file():
-            if not self._owned_process_alive() or time.monotonic() >= deadline:
-                raise RuntimeError("chrome_start_failed")
-            time.sleep(0.05)
-        lines = port_file.read_text().splitlines()
+        lines = _wait_for_port_file(port_file, self._owned_process_alive)
         if (len(lines) != 2 or not lines[0].isdigit() or not 1 <= int(lines[0]) <= 65535
                 or not re.fullmatch(r"/devtools/browser/[a-zA-Z0-9-]+", lines[1])):
             raise RuntimeError("browser_session_unavailable")
@@ -233,6 +239,10 @@ class OwnedChrome:
             self.call("Target.createTarget", url="about:blank", newWindow=True, background=True)
         if has_page or self.allow_launch:
             self.call("Browser.setDownloadBehavior", behavior="deny")
+        if self.session_data.get("downloads") is not None:
+            from .downloads import recover_downloads
+
+            recover_downloads(self)
         # Without a page, resume reports the closed target; explicit close still works.
         self.session_data["endpoint"] = endpoint
         self._save_session()
@@ -298,6 +308,8 @@ class OwnedChrome:
             if remaining <= 0:
                 raise TimeoutError("browser_request_timeout")
             reply = json.loads(self.socket.recv(timeout=remaining))
+            if "method" in reply and self.on_event is not None:
+                self.on_event(reply["method"], reply.get("params", {}))
             if reply.get("id") != self.sequence:
                 continue
             if "error" in reply:
