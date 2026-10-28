@@ -51,7 +51,7 @@ the optional legacy human-input handoff remains included. `approval_count` exclu
 exact initial URL proposal automatically approved by Tink; its brief round-trip
 still counts toward waiting time. Evidence is bounded
 visible page text with a source URL/title, retained across observations. Completion
-is the model's stopping decision; the parent evaluates the evidence. Incomplete
+is the model's stopping decision or one requested observed action; the parent evaluates the evidence. Incomplete
 or interrupted model charges are labeled with `usage.cost_complete: false`.
 `persistent_session`, `session_reused`, and the opaque `browser_session` identify
 live-session continuity. `rejected_decisions` counts actions rejected before
@@ -71,6 +71,37 @@ detection for that check; a start message can supply `chrome_path` for execution
 The self-test's `persistent_session: true` advertises live-session support.
 `approval_wait_budget: true` and `popup_following: true` let hosts reject older
 workers before relying on separate approval timing or click-opened tabs.
+
+### Perform an already observed action
+
+The self-test's `observed_actions: true` advertises the optional `perform` request.
+When a persistent task returns page controls in `available_actions`, supported
+click, native-select, keyboard and Back entries include an opaque `action_ref`.
+The parent can choose one directly without asking Jev to make the same decision:
+
+```json
+{"type":"start","protocol_version":1,"action":"perform","tab_id":"observed-tab-id","action_ref":"64-lowercase-hex-characters-from-available_actions"}
+```
+
+`goal` is optional descriptive context. `start_url`, `new_tab`, and
+`verification_response` are incompatible with `perform`. Text entry remains a
+normal task; references cannot supply text, selectors, coordinates or new actions.
+Tab inventory requests do not create a page observation or references.
+
+The worker binds references to the latest observation's owned browser session,
+tab, document, field state, target semantics and freshness guard. Private session
+metadata stores random references and hashes, without raw page or field values.
+Under the exclusive profile lease, the observation is consumed before approval
+or execution. Approval, cancellation, popup following, MFA handoff and verified
+downloads still apply. A stale, foreign or replayed reference executes nothing
+and returns `blocked` / `action_ref_unavailable` with refreshed controls where
+available. MFA pages do not expose action references.
+
+A successful request executes at most one observed action and returns
+`completed` / `action_performed`, updated evidence and new references. It makes
+zero model calls; `usage` reports zero model tokens/cost, and an interrupted
+perform request does not imply unknown model charges. `outcome_verified` remains
+false: executing a control is not independent proof of the user's whole goal.
 
 ## Sessions and supported scope
 

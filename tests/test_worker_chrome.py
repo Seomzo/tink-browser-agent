@@ -401,8 +401,11 @@ def popup_url():
         def do_GET(self):
             if self.path.startswith('/tickets'):
                 body = b'<title>Tickets</title><h1>Ticket options</h1><p>General admission available</p>'
+            elif self.path.startswith('/ordinary'):
+                body = b'''<title>Ordinary clicks</title><button onclick="window.clicks=(window.clicks||0)+1;
+                    document.querySelector('p').textContent='Count '+window.clicks">Increment</button><p>Count 0</p>'''
             elif self.path.startswith('/source'):
-                delay = 300 if 'delayed' in self.path else 0
+                delay = 600 if 'slow' in self.path else 300 if 'delayed' in self.path else 0
                 body = (f'''<!doctype html><title>Festival</title><h1>Festival</h1>
                     <button onclick="window.clicks=(window.clicks||0)+1;
                       setTimeout(()=>window.open('/tickets','_blank'),{delay})">Buy Passes</button>''').encode()
@@ -443,8 +446,9 @@ def test_click_follows_owned_popup_and_next_task_resumes_it(monkeypatch, live_se
         finally:
             browser.close()
 
-    def choose(page, *_args, **_kwargs):
-        if 'Ticket options' in page['text']:
+    def choose(page, _goal, history, **_kwargs):
+        # A fast DONE on the old page must wait for/follow a delayed child before completion.
+        if 'Ticket options' in page['text'] or history:
             return live_decision('DONE')
         target = next(a for a in page['actions'] if a['kind'] == 'click' and a['label'] == 'Buy Passes')
         return live_decision(target['id'])
@@ -476,8 +480,158 @@ def test_click_follows_owned_popup_and_next_task_resumes_it(monkeypatch, live_se
     assert live_evaluate("[window.popupMemory,sessionStorage.getItem('ticket')]") == [42, 'retained']
 
 
+@pytest.mark.parametrize('phase', ['model', 'approval'])
+def test_delayed_popup_during_work_rejects_old_tab_decision(monkeypatch, live_session, popup_url, phase):
+    from jev_ultrafast.browser import Browser
+    from jev_ultrafast.worker_browser import OwnedChrome
+
+    with OwnedChrome() as chrome:
+        browser = Browser(popup_url + '/source?slow', transport=chrome.call, owns_target=False,
+                          on_target_changed=chrome.retain_target)
+        source = browser.target
+        decisions, approvals = [], []
+
+        def choose(page, _goal, history, **_kwargs):
+            if 'Ticket options' in page['text']:
+                return live_decision('DONE')
+            if history:
+                decisions.append('old-tab')
+                if phase == 'model':
+                    time.sleep(0.7)
+            return live_decision(next(a['id'] for a in page['actions'] if a['label'] == 'Buy Passes'))
+
+        def approve(*_args):
+            approvals.append(True)
+            if phase == 'approval' and len(approvals) == 2:
+                time.sleep(0.7)
+
+        monkeypatch.setattr(agent, 'choose', choose)
+        runner = agent.Agent(None, 'Open ticket options', browser=browser, before_action=approve)
+        try:
+            for _ in runner.run():
+                pass
+            assert decisions == ['old-tab']
+            assert len(runner.state['history']) == 1 and len(approvals) == 2
+            assert 'Ticket options' in runner.state['page']['text'] and browser.target != source
+            probe = Browser(None, transport=chrome.call, target=source, owns_target=False)
+            try:
+                assert probe.evaluate('window.clicks') == 1
+            finally:
+                probe.close()
+        finally:
+            browser.close()
+
+
+@pytest.mark.parametrize('stop', ['step_limit', 'deny', 'cancel'])
+def test_delayed_popup_settles_on_task_stop_without_replaying_click(monkeypatch, live_session, popup_url, stop):
+    from jev_ultrafast.browser import Browser
+    from jev_ultrafast.worker import Stopped
+    from jev_ultrafast.worker_browser import OwnedChrome
+
+    assert run_live_task(monkeypatch, popup_url + '/source?slow')['status'] == 'completed'
+    original = json.loads(live_session.read_text())
+    decisions = []
+
+    def choose(page, *_args, **_kwargs):
+        decisions.append(page['url'])
+        return live_decision(next(a['id'] for a in page['actions'] if a['label'] == 'Buy Passes'))
+
+    monkeypatch.setattr(agent, 'choose', choose)
+    protocol = Protocol(io.StringIO(), io.StringIO())
+    approvals = []
+
+    def respond(**_kwargs):
+        approvals.append(True)
+        assert len(approvals) <= 2
+        if len(approvals) == 2 and stop == 'cancel':
+            protocol.stop = Stopped('cancelled', 'cancelled')
+        return {'type': 'action_response', 'id': str(len(approvals)),
+                'allow': len(approvals) == 1 or stop != 'deny'}
+
+    protocol.messages.get = respond
+    result = run_task(validate_request({'type': 'start', 'protocol_version': 1,
+                                       'goal': 'Open ticket options', 'start_url': None,
+                                       'max_steps': 1 if stop == 'step_limit' else 3}), protocol)
+    expected = {'step_limit': ('blocked', 'step_limit'), 'deny': ('denied', 'approval_denied'),
+                'cancel': ('cancelled', 'cancelled')}
+    assert (result['status'], result['stop_reason']) == expected[stop]
+    assert len(decisions) == 2 and result['step_count'] == 1
+    assert len(approvals) == (1 if stop == 'step_limit' else 2)
+    assert 'Ticket options' in result['evidence'][-1]['text']
+    retained = json.loads(live_session.read_text())
+    assert retained['target_id'] == result['current_tab_id'] != original['target_id']
+    assert retained['pid'] == original['pid']
+    with OwnedChrome(allow_launch=False) as chrome:
+        probe = Browser(None, transport=chrome.call, target=original['target_id'], owns_target=False)
+        try:
+            assert probe.evaluate('window.clicks') == 1
+        finally:
+            probe.close()
+
+
+def test_real_multiple_owned_popups_stop_before_old_tab_action(monkeypatch, live_session, popup_url):
+    from jev_ultrafast.browser import Browser
+    from jev_ultrafast.worker_browser import OwnedChrome
+
+    with OwnedChrome() as chrome:
+        browser = Browser(popup_url + '/ordinary', transport=chrome.call, owns_target=False,
+                          on_target_changed=Mock())
+        try:
+            page = browser.observe(screenshot=False)
+            action = next(a for a in page['actions'] if a['label'] == 'Increment')
+            browser.act(action, page)
+            # Separate trusted fixture gestures ensure Chrome permits both actual child windows.
+            for suffix in ('first', 'second'):
+                browser.call('Runtime.evaluate', expression=f"window.open('/tickets?{suffix}','_blank')",
+                             userGesture=True)
+            with pytest.raises(RuntimeError, match='multiple_new_tabs'):
+                browser.act(action, page)
+            assert browser.evaluate('window.clicks') == 1
+            browser.on_target_changed.assert_not_called()
+        finally:
+            browser.close()
+
+
+def test_no_popup_five_click_overlap_benchmark(monkeypatch, live_session, popup_url):
+    from jev_ultrafast.browser import Browser
+    from jev_ultrafast.worker_browser import OwnedChrome
+
+    timings = {}
+    with OwnedChrome() as chrome:
+        for mode in ('serialized', 'overlapped'):
+            browser = Browser(popup_url + '/ordinary', transport=chrome.call, on_target_changed=Mock())
+            if mode == 'serialized':
+                discover = browser._follow_new_tab
+                browser._follow_new_tab = lambda *, settle=False: discover(settle=True)
+
+            def choose(page, *_args, **_kwargs):
+                time.sleep(0.5)  # Explicit model-latency stub, no remote inference or approvals.
+                if 'Count 5' in page['text']:
+                    return live_decision('DONE')
+                return live_decision(next(a['id'] for a in page['actions'] if a['label'] == 'Increment'))
+
+            monkeypatch.setattr(agent, 'choose', choose)
+            runner = agent.Agent(None, 'Increment five times', browser=browser)
+            try:
+                started = time.monotonic()
+                for _ in runner.run():
+                    pass
+                timings[mode] = time.monotonic() - started
+                assert browser.evaluate('window.clicks') == 5
+                assert len(runner.state['history']) == 5
+                assert browser.pending_tabs is None  # Fast terminal decisions also settle the last click.
+            finally:
+                browser.close()
+    print('popup_overlap_benchmark=' + json.dumps({
+        'clicks': 5, 'model_stub_ms': 500, **{key + '_s': round(value, 3) for key, value in timings.items()},
+        'saved_s': round(timings['serialized'] - timings['overlapped'], 3),
+    }))
+    assert timings['overlapped'] < timings['serialized'] - 1.5
+
+
 @pytest.mark.parametrize('stop', ['deny', 'cancel'])
 def test_denied_or_cancelled_popup_click_never_opens_child(monkeypatch, live_session, popup_url, stop):
+    from jev_ultrafast.browser import Browser
     from jev_ultrafast.worker import Stopped
     from jev_ultrafast.worker_browser import OwnedChrome
 
@@ -499,10 +653,19 @@ def test_denied_or_cancelled_popup_click_never_opens_child(monkeypatch, live_ses
     result = run_task(validate_request({'type': 'start', 'protocol_version': 1,
                                        'goal': 'Open ticket options', 'start_url': None}), protocol)
     assert result['status'] == ('denied' if stop == 'deny' else 'cancelled') and result['step_count'] == 0
-    assert json.loads(live_session.read_text()) == original
+    current = json.loads(live_session.read_text())
+    # A new observation retires ephemeral action refs; browser ownership must not change.
+    assert {key: value for key, value in current.items() if key != 'action_refs'} == {
+        key: value for key, value in original.items() if key != 'action_refs'
+    }
     with OwnedChrome(allow_launch=False) as chrome:
         assert not any(t.get('openerId') == original['target_id']
                        for t in chrome.call('Target.getTargets')['targetInfos'])
+        probe = Browser(None, transport=chrome.call, target=original['target_id'], owns_target=False)
+        try:
+            assert probe.evaluate('window.clicks || 0') == 0
+        finally:
+            probe.close()
     assert live_evaluate('window.clicks || 0') == 0
 
 

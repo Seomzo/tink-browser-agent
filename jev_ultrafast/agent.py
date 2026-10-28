@@ -118,7 +118,7 @@ class Agent:
                         state["page"] = refreshed
                         state["status"] = "ready"
                         return self.snapshot()
-                if not state["browser"].fresh(page):
+                if not state["browser"].fresh(page, settle_tabs=True):
                     state["status"] = "ready"
                     raise StalePage("Page changed since the decision. Choose again.")
                 state["status"] = "done" if selected == "DONE" else "blocked"

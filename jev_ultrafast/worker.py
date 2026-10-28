@@ -1,10 +1,13 @@
 """One supervised browser task over bounded JSONL. Stdout is protocol-only."""
 
 import argparse
+import hashlib
 import json
 import math
 import os
 import queue
+import re
+import secrets
 import signal
 import sys
 import threading
@@ -46,6 +49,8 @@ SUMMARIES = {
     "multiple_new_tabs": "The click opened multiple browser tabs. No tab was selected; inspect them before continuing.",
     "browser_closed": "The live browser session is closed. Saved site data was retained.",
     "tabs_listed": "Open tabs in this Tink browser are listed. Use an observed tab_id to continue there.",
+    "action_performed": "The observed action was executed. Review the updated page evidence before continuing.",
+    "action_ref_unavailable": "That observed action is no longer available. Choose from the refreshed page controls.",
     "verification_required": ("This tab needs a verification code. Retrieve it through authorized email access "
                               "or ask the user, then resume this tab with verification_response. "
                               "The browser remains open."),
@@ -70,7 +75,7 @@ def validate_request(request):
         raise ValueError("invalid_request")
     action = request.get("action", "run")
     goal, url = request.get("goal", ""), request.get("start_url")
-    if (action not in {"run", "tabs"} or not isinstance(goal, str) or len(goal) > 12000
+    if (action not in {"run", "tabs", "perform"} or not isinstance(goal, str) or len(goal) > 12000
             or (action == "run" and not goal.strip())):
         raise ValueError("invalid_request")
     if url is not None:
@@ -89,6 +94,7 @@ def validate_request(request):
         raise ValueError("invalid_request")
     tab_id, new_tab = request.get("tab_id"), request.get("new_tab", False)
     response, handoff = request.get("verification_response"), request.get("verification_handoff", "human")
+    action_ref = request.get("action_ref")
     if (tab_id is not None and (not isinstance(tab_id, str) or not tab_id or len(tab_id) > 128)
             or type(new_tab) is not bool or (new_tab and (url is None or tab_id is not None))
             or handoff not in {"human", "agent"}
@@ -96,9 +102,61 @@ def validate_request(request):
                                          or len(response) > 500 or tab_id is None or url is not None))
             or (action == "tabs" and (url is not None or tab_id is not None or new_tab or response is not None))):
         raise ValueError("invalid_request")
+    if (action == "perform" and (not isinstance(action_ref, str) or not re.fullmatch(r"[0-9a-f]{64}", action_ref)
+                                 or tab_id is None or url is not None or new_tab or response is not None)
+            or (action != "perform" and action_ref is not None)):
+        raise ValueError("invalid_request")
     return {"action": action, "goal": goal.strip(), "start_url": url, "max_steps": steps,
             "timeout_seconds": timeout, "chrome_path": chrome_path, "tab_id": tab_id, "new_tab": new_tab,
-            "verification_response": response, "verification_handoff": handoff}
+            "verification_response": response, "verification_handoff": handoff, "action_ref": action_ref}
+
+
+def observation_hash(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def action_binding(page, action):
+    if action.get("kind") not in {"click", "select", "key", "back"}:
+        return None
+    guard = page.get("guards", {}).get(str(action.get("node")))
+    if action["kind"] != "back" and guard is None:
+        return None
+    return {"action": observation_hash({key: value for key, value in action.items() if key not in {"id", "rect"}}),
+            "guard": observation_hash(guard)}
+
+
+def remember_actions(chrome, tab_id, page):
+    """Keep one bounded observation, storing hashes rather than page or field values."""
+    chrome.session_data.pop("action_refs", None)
+    refs = {}
+    if page.get("page_key") and not page.get("authenticationRequired"):
+        entries = {}
+        for action in page.get("actions", [])[:250]:
+            binding = action_binding(page, action)
+            if binding is not None:
+                token = secrets.token_hex(32)
+                refs[action["id"]] = token
+                entries[token] = binding
+        if entries:
+            chrome.session_data["action_refs"] = {
+                "browser_session": chrome.session_data["browser_session"], "tab_id": tab_id,
+                "page": observation_hash(page["page_key"]), "entries": entries,
+            }
+    chrome._save_session()
+    return refs
+
+
+def resolve_action_ref(journal, token, browser_session, tab_id, page):
+    if (not isinstance(journal, dict) or journal.get("browser_session") != browser_session
+            or journal.get("tab_id") != tab_id or not page.get("page_key")
+            or journal.get("page") != observation_hash(page["page_key"])
+            or not isinstance(journal.get("entries"), dict)):
+        return None
+    binding = journal["entries"].get(token)
+    if not isinstance(binding, dict):
+        return None
+    matches = [action for action in page.get("actions", [])[:250] if action_binding(page, action) == binding]
+    return matches[0] if len(matches) == 1 else None
 
 
 def owned_tabs(chrome):
@@ -280,6 +338,8 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
     status, reason = "error", "worker_error"
     persistent = bool(os.environ.get("TINK_BROWSER_SESSION_DIR"))
     session_reused, browser_session = False, None
+    action_refs, action_journal = {}, None
+    performing = request.get("action") == "perform"
     rejected_decisions, repeated_rejections, rejection_key = 0, 0, None
 
     def observe(page):
@@ -323,6 +383,10 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
             browser_args = {"transport": chrome.call, "on_target_changed": followed_target}
             if persistent:
                 browser_session = chrome.session_data["browser_session"]
+                if request.get("action") != "tabs":
+                    # Consume before approval, including invalid refs and MFA handoffs.
+                    action_journal = chrome.session_data.pop("action_refs", None)
+                    chrome._save_session()
                 tabs = owned_tabs(chrome)
                 if request.get("action") == "tabs":
                     current_tab_id = chrome.session_data.get("target_id")
@@ -359,7 +423,8 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
             try:
                 # Activate only this Tink browser's owned target; never a personal Chrome tab.
                 chrome.call("Target.activateTarget", targetId=browser.target)
-                agent = agent_factory(request["start_url"], request["goal"], browser=browser,
+                agent = agent_factory(request["start_url"], request["goal"] or "Perform the observed browser action",
+                                      browser=browser,
                                       before_action=before_action)
                 response = request.get("verification_response")
                 pending = chrome.session_data.get("pending_verifications", {}) if persistent else {}
@@ -414,6 +479,8 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
                             raise Stopped("blocked", "verification_not_requested")
                         response = None
                     if agent.state["page"].get("authenticationRequired") and not handoff_used:
+                        if performing:
+                            require_verification()
                         if request.get("verification_handoff") == "agent":
                             if not matches:
                                 require_verification()
@@ -430,9 +497,22 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
                             if answer.lower() != "continue":
                                 agent.state["goal"] += "\nUser-provided verification response: " + answer
                             agent.state["status"] = "ready"
-                    if len(agent.state["decisions"]) >= request["max_steps"] * 2:
-                        raise Stopped("blocked", "decision_limit")
-                    agent.command("predict")
+                    if performing:
+                        action = resolve_action_ref(action_journal, request["action_ref"], browser_session,
+                                                    browser.target, agent.state["page"])
+                        if action is None:
+                            raise Stopped("blocked", "action_ref_unavailable")
+                        # Agent.act retains approval, freshness, and execution-before-observation logging.
+                        # This is a host choice, not a model call, so it never enters decisions/usage.
+                        agent.state["started_at"] = time.perf_counter()
+                        agent.state["decision"] = {"choice": action["id"], "operation": "SELECT"
+                                                   if action["kind"] == "select" else "CLICK", "target": None,
+                                                   "probabilities": {action["id"]: 1}, "confidence": 1,
+                                                   "latency_ms": 0, "usage": {}}
+                    else:
+                        if len(agent.state["decisions"]) >= request["max_steps"] * 2:
+                            raise Stopped("blocked", "decision_limit")
+                        agent.command("predict")
                     # Permit DONE/BLOCKED after the last action, but never a further mutation.
                     if (len(agent.state["history"]) >= request["max_steps"]
                             and agent.state["decision"]["choice"] not in {"DONE", "BLOCKED"}):
@@ -482,6 +562,19 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
                         require_verification(challenge["url"])
                     if downloads is not None:
                         downloads.poll()
+                    if performing:
+                        if len(agent.state["history"]) == previous_actions:
+                            raise Stopped("blocked", "action_ref_unavailable")
+                        if not browser.fresh(agent.state["page"], settle_tabs=True):
+                            agent.state["page"] = browser.observe(screenshot=False)
+                            observe(agent.state["page"])
+                        protocol.check()
+                        if downloads is not None:
+                            downloads.wait()
+                        if agent.state["page"].get("authenticationRequired"):
+                            require_verification()
+                        status, reason = "completed", "action_performed"
+                        break
                     if agent.state["status"] == "done":
                         if downloads is not None:
                             downloads.wait()
@@ -493,12 +586,31 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
             finally:
                 # Do not let a second watchdog signal interrupt cleanup after the loop has stopped.
                 protocol.finished.set()
+                settled = True
+                if agent is not None and getattr(browser, "pending_tabs", None) is not None:
+                    try:
+                        # Step limits, denial and cancellation can bypass Agent's terminal
+                        # barrier. Finish only the remaining read-only discovery window.
+                        if not browser.fresh(agent.state["page"], settle_tabs=True):
+                            agent.state["page"] = browser.observe(screenshot=False)
+                            observe(agent.state["page"])
+                    except Exception:
+                        settled = False  # Preserve the original stop, but issue no stale references.
                 current_tab_id = browser.target
                 if persistent:
                     try:
                         tabs = owned_tabs(chrome)
                     except Exception:
                         pass  # Preserve the task result if Chrome disappeared during cancellation.
+                    else:
+                        if settled and agent is not None and any(tab["id"] == current_tab_id for tab in tabs):
+                            try:
+                                action_refs = remember_actions(chrome, current_tab_id, agent.state["page"])
+                            except Exception:
+                                # References are optional handoff metadata; failed persistence
+                                # must not replace an executed step, denial, or cancellation.
+                                action_refs = {}
+                                chrome.session_data.pop("action_refs", None)
                 try:
                     browser.close()
                 except Exception:
@@ -521,7 +633,7 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
         steps.append({"step": action["step"], "kind": action["kind"], "label": action["action"],
                       "url": action["url"], "elapsed_ms": action["elapsed_ms"]})
     usage = usage_summary(state)
-    if status in {"error", "cancelled", "timeout"}:
+    if status in {"error", "cancelled", "timeout"} and not performing:
         usage["cost_complete"] = False  # An interrupted/failed request may not have returned its usage.
     elapsed_ms = round((time.monotonic() - started) * 1000)
     approval_wait_ms = round(protocol.approval_wait_seconds * 1000)
@@ -538,8 +650,9 @@ def run_task(request, protocol, *, chrome_factory=OwnedChrome, browser_factory=B
     if status in {"blocked", "completed"} and reason != "verification_required" and state.get("page"):
         # Keep code-owned kinds/roles exact; snapshot redacts known sensitive descriptive text.
         result["available_actions"] = [
-            {key: (redacted[key] if key in {"label", "context"} else action[key])[:200]
-             for key in ("kind", "role", "label", "context") if isinstance(action.get(key), str)}
+            {**{key: (redacted[key] if key in {"label", "context"} else action[key])[:200]
+                for key in ("kind", "role", "label", "context") if isinstance(action.get(key), str)},
+             **({"action_ref": action_refs[action["id"]]} if action["id"] in action_refs else {})}
             for action, redacted in zip(state["page"].get("actions", [])[:250],
                                         agent.snapshot()["page"].get("actions", [])[:250])
         ]
@@ -562,7 +675,7 @@ def main():
         protocol.emit("self_test", worker="tink_browser", version="1", available=True, ready=True,
                       chrome_available=binary is not None, chrome_path=binary,
                       platform_supported=sys.platform != "win32", supervised_actions=True, persistent_session=True,
-                      approval_wait_budget=True, popup_following=True, workflow_support=True)
+                      approval_wait_budget=True, popup_following=True, workflow_support=True, observed_actions=True)
         return
     if args.close_browser or args.cleanup_downloads:
         status, reason = "completed", "browser_closed" if args.close_browser else "downloads_cleaned"

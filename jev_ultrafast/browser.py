@@ -52,8 +52,8 @@ class Browser:
         self.call("Emulation.setDeviceMetricsOverride", width=1120, height=780, deviceScaleFactor=1, mobile=False)
         self.call("Emulation.setFocusEmulationEnabled", enabled=True)
 
-    def _follow_new_tab(self):
-        pending, self.pending_tabs = self.pending_tabs, None
+    def _follow_new_tab(self, *, settle=False):
+        pending = self.pending_tabs
         if pending is None:
             return
         opener, previous, deadline = pending
@@ -63,12 +63,14 @@ class Browser:
                           if target["type"] == "page" and target.get("openerId") == opener
                           and target["targetId"] not in previous]
             if len(candidates) > 1:
+                self.pending_tabs = None
                 raise RuntimeError("multiple_new_tabs")
             now = time.monotonic()
             if candidates:
                 first_seen = first_seen if first_seen is not None else now
                 # Give sibling tabs from the same click a short chance to appear before choosing.
                 if now - first_seen >= 0.1 or now >= deadline:
+                    self.pending_tabs = None
                     previous_session = self.session
                     self._attach(candidates[0]["targetId"])
                     self.on_target_changed(self.target)
@@ -78,7 +80,10 @@ class Browser:
             else:
                 first_seen = None
             if now >= deadline:
+                self.pending_tabs = None
                 return
+            if not candidates and not settle:
+                return  # Overlap discovery with model/approval work; keep the pending binding.
             time.sleep(0.02)
 
     def call(self, method, **params):
@@ -152,7 +157,11 @@ class Browser:
             time.sleep(0.05)
         return page
 
-    def fresh(self, page, action=None):
+    def fresh(self, page, action=None, *, settle_tabs=False):
+        previous_target = self.target
+        self._follow_new_tab(settle=settle_tabs)
+        if self.target != previous_target:
+            return False  # Even a same-URL child requires a new observation/decision.
         if action is not None and action["kind"] == "back":
             if back_action(self.call("Page.getNavigationHistory")) != action:
                 return False
@@ -170,7 +179,7 @@ class Browser:
         return self.evaluate(MARKER) == page["marker"]
 
     def act(self, action, page, text=None):
-        if not self.fresh(page, action):
+        if not self.fresh(page, action, settle_tabs=True):
             raise StalePage("Page changed since this decision. Observe again.")
         if action["kind"] == "wait":
             time.sleep(0.1)
