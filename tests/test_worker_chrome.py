@@ -78,7 +78,7 @@ def test_real_fixture_fill_click_and_visible_outcome(monkeypatch, fixture_url):
     })))
     result = run_task(validate_request({"type": "start", "protocol_version": 1, "goal": "Save book",
                                         "start_url": fixture_url}), protocol)
-    assert result["status"] == "completed", result
+    assert result["status"] == "completed", json.dumps(result)
     assert result["step_count"] == 2
     assert [step["kind"] for step in result["steps"]] == ["fill", "click"]
     assert "Saved book" in result["evidence"][-1]["text"]
@@ -108,7 +108,8 @@ def test_inflight_model_interrupt_closes_owned_chrome(mode, fixture_url):
         assert proposal["type"] == "action_proposal"
         child.stdin.write(json.dumps({"type": "action_response", "id": proposal["id"], "allow": True}) + "\n")
         child.stdin.flush()
-        assert json.loads(child.stdout.readline())["type"] == "started"
+        started = json.loads(child.stdout.readline())
+        assert started["type"] == "started", json.dumps(started)
         assert json.loads(child.stdout.readline())["type"] == "observation"
         if mode == "cancel":
             child.stdin.write('{"type":"cancel"}\n')
@@ -299,6 +300,10 @@ def live_evaluate(expression):
             browser.close()
 
 
+def session_metadata_without_action_refs(metadata):
+    return {key: value for key, value in metadata.items() if key != 'action_refs'}
+
+
 def test_live_session_retains_exact_tab_and_memory_after_blocked(monkeypatch, live_session, fixture_url):
     first = run_live_task(monkeypatch, fixture_url, choice='BLOCKED')
     assert first['status'] == 'blocked', first
@@ -310,7 +315,9 @@ def test_live_session_retains_exact_tab_and_memory_after_blocked(monkeypatch, li
     assert second['status'] == 'completed', second
     assert second['session_reused'] and second['browser_session'] == first['browser_session']
     assert 'Manual verification complete' in second['evidence'][-1]['text']
-    assert json.loads(live_session.read_text()) == metadata
+    assert session_metadata_without_action_refs(json.loads(live_session.read_text())) == (
+        session_metadata_without_action_refs(metadata)
+    )
     assert live_evaluate("[sessionStorage.getItem('login'),window.fixtureLive]") == ['yes', 42]
     # A second process cannot close a session while its action lease is held.
     from jev_ultrafast.worker_browser import OwnedChrome
@@ -376,7 +383,9 @@ def test_all_windows_closed_can_resume_reopen_and_close(monkeypatch, live_sessio
     resumed = run_live_task(monkeypatch)
     assert resumed['stop_reason'] == 'browser_target_closed', resumed
     assert resumed['usage']['decision_calls'] == 0
-    assert json.loads(live_session.read_text()) == original
+    assert session_metadata_without_action_refs(json.loads(live_session.read_text())) == (
+        session_metadata_without_action_refs(original)
+    )
     with OwnedChrome(allow_launch=False) as chrome:
         assert not any(t['type'] == 'page' for t in chrome.call('Target.getTargets')['targetInfos'])
 
@@ -655,9 +664,7 @@ def test_denied_or_cancelled_popup_click_never_opens_child(monkeypatch, live_ses
     assert result['status'] == ('denied' if stop == 'deny' else 'cancelled') and result['step_count'] == 0
     current = json.loads(live_session.read_text())
     # A new observation retires ephemeral action refs; browser ownership must not change.
-    assert {key: value for key, value in current.items() if key != 'action_refs'} == {
-        key: value for key, value in original.items() if key != 'action_refs'
-    }
+    assert session_metadata_without_action_refs(current) == session_metadata_without_action_refs(original)
     with OwnedChrome(allow_launch=False) as chrome:
         assert not any(t.get('openerId') == original['target_id']
                        for t in chrome.call('Target.getTargets')['targetInfos'])
@@ -715,7 +722,9 @@ def test_task_stop_retains_live_browser_without_late_mutation(monkeypatch, live_
         if child.poll() is None:
             os.killpg(child.pid, signal.SIGKILL)
             child.wait(timeout=5)
-    assert json.loads(live_session.read_text()) == original
+    assert session_metadata_without_action_refs(json.loads(live_session.read_text())) == (
+        session_metadata_without_action_refs(original)
+    )
     values = live_evaluate("[sessionStorage.getItem('login'),window.fixtureLive,"
                            "document.querySelector('p').textContent]")
     assert values == ['yes', 42, 'Ready']
