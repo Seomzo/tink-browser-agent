@@ -55,7 +55,7 @@ def setup_loop(monkeypatch, choices=("e1", "DONE"), responses=(True, True)):
     protocol = Protocol(io.StringIO(), output)
     for index, allow in enumerate(responses, 1):
         protocol.messages.put({"type": "action_response", "id": str(index), "allow": allow})
-    browser = Mock(observe=Mock(return_value=page()), fresh=Mock(return_value=True),
+    browser = Mock(target="source", observe=Mock(return_value=page()), fresh=Mock(return_value=True),
                    wait_for_change=Mock(return_value=page()))
     chrome = Mock()
     chrome.__enter__ = Mock(return_value=chrome)
@@ -91,6 +91,7 @@ def test_resume_requires_live_session_without_launch(monkeypatch):
     protocol, _, _, bf, cf = setup_loop(monkeypatch)
     result = run_task(request(start_url=None), protocol, chrome_factory=cf, browser_factory=bf)
     assert result["stop_reason"] == "browser_session_missing"
+    assert "available_actions" not in result
     cf.assert_not_called()
 
 
@@ -129,6 +130,7 @@ def test_fill_approval_contains_generated_text_before_mutation(monkeypatch):
     browser.act.side_effect = act
     result = run_task(request(), protocol, chrome_factory=chrome_factory, browser_factory=browser_factory)
     assert result["status"] == "completed" and result["stop_reason"] == "model_done"
+    assert result["available_actions"] == [{"kind": "fill", "role": "textbox", "label": "Search"}]
     assert result["outcome_verified"] is False
     assert result["step_count"] == 1 and result["evidence"][0]["title"] == "Search"
     assert result["usage"] == {"decision_calls": 2, "text_calls": 1, "input_tokens": 40, "output_tokens": 2,
@@ -171,14 +173,108 @@ def test_partial_execution_survives_observation_failure(monkeypatch):
     browser.observe.side_effect = [page(), RuntimeError("SECRET should never leave worker")]
     result = run_task(request(), protocol, chrome_factory=chrome_factory, browser_factory=browser_factory)
     assert result["status"] == "error" and result["stop_reason"] == "worker_error"
+    assert "available_actions" not in result
     assert result["step_count"] == 1 and len(result["evidence"]) == 1
     assert "SECRET" not in json.dumps(result)
+
+
+def test_failed_navigation_reports_page_error_without_calling_model(monkeypatch):
+    protocol, _, browser, bf, cf = setup_loop(monkeypatch)
+    browser.observe.return_value.update(url="chrome-error://chromewebdata/", text="DNS_PROBE_FINISHED_NXDOMAIN")
+    result = run_task(request(), protocol, chrome_factory=cf, browser_factory=bf)
+    assert (result["status"], result["stop_reason"]) == ("blocked", "navigation_failed")
+    assert result["evidence"][0]["text"] == "DNS_PROBE_FINISHED_NXDOMAIN"
+    loop.choose.assert_not_called()
+    browser.act.assert_not_called()
 
 
 def test_model_blocked_after_action_is_not_no_progress(monkeypatch):
     protocol, _, _, browser_factory, chrome_factory = setup_loop(monkeypatch, choices=("e1", "BLOCKED"))
     result = run_task(request(), protocol, chrome_factory=chrome_factory, browser_factory=browser_factory)
     assert result["stop_reason"] == "model_blocked"
+
+
+def test_successful_inspection_returns_observed_open_control_without_executing_it(monkeypatch):
+    protocol, _, browser, bf, cf = setup_loop(monkeypatch, choices=("DONE",))
+    browser.observe.return_value["actions"] = [
+        {"id": "combo", "kind": "click", "role": "combobox", "label": "Open filter type",
+         "context": "Filter settings", "value": "PRIVATE VALUE", "node": 2, "open_node": 3, "open_display": 4},
+    ]
+    result = run_task(request(goal="Inspect the available controls"), protocol, chrome_factory=cf, browser_factory=bf)
+    assert (result["status"], result["stop_reason"], result["step_count"]) == ("completed", "model_done", 0)
+    assert result["available_actions"] == [
+        {"kind": "click", "role": "combobox", "label": "Open filter type", "context": "Filter settings"},
+    ]
+    browser.act.assert_not_called()
+
+
+def test_tabs_only_completion_has_no_page_controls(monkeypatch):
+    monkeypatch.setenv("TINK_BROWSER_SESSION_DIR", "/owned/session")
+    protocol, _, _, bf, cf = setup_loop(monkeypatch)
+    cf.return_value.session_data = {"browser_session": "owned", "target_id": "source"}
+    cf.return_value.call.return_value = {"targetInfos": [{"targetId": "source", "type": "page"}]}
+    result = run_task(request(action="tabs", start_url=None), protocol, chrome_factory=cf, browser_factory=bf)
+    assert (result["status"], result["stop_reason"]) == ("completed", "tabs_listed")
+    assert "available_actions" not in result
+    bf.assert_not_called()
+
+
+@pytest.mark.parametrize("reason,choices,max_steps,reject", [
+    ("model_blocked", ("BLOCKED",), 20, False),
+    ("no_progress", ("e1", "e1", "e1"), 20, False),
+    ("step_limit", ("e1", "e1"), 1, False),
+    ("decision_limit", ("e1", "e1"), 1, True),
+    ("action_unavailable", ("e1", "e1", "e1"), 20, True),
+])
+def test_blocked_handoff_lists_only_observed_control_descriptions(monkeypatch, reason, choices, max_steps, reject):
+    protocol, _, browser, bf, cf = setup_loop(monkeypatch, choices=choices, responses=(True,) * 4)
+    observed = browser.observe.return_value
+    observed["actions"] += [
+        {"id": "combo", "kind": "click", "role": "combobox", "label": "Open filter type",
+         "value": "PRIVATE SELECTED VALUE", "node": 2, "open_node": 3, "open_display": 4,
+         "selector": "PRIVATE SELECTOR", "context": "Filter settings"},
+        {"id": "wait", "kind": "wait", "label": "Wait for the page to update"},
+    ]
+    if reject:
+        browser.act.side_effect = StalePage("Changed before input")
+    result = run_task(request(max_steps=max_steps), protocol, chrome_factory=cf, browser_factory=bf)
+    assert (result["status"], result["stop_reason"]) == ("blocked", reason)
+    assert result["available_actions"] == [
+        {"kind": "fill", "role": "textbox", "label": "Search"},
+        {"kind": "click", "role": "combobox", "label": "Open filter type", "context": "Filter settings"},
+        {"kind": "wait", "label": "Wait for the page to update"},
+    ]
+    assert "PRIVATE" not in json.dumps(result["available_actions"])
+
+
+def test_blocked_control_handoff_is_bounded_to_observed_fields(monkeypatch):
+    protocol, _, browser, bf, cf = setup_loop(monkeypatch, choices=("BLOCKED",))
+    browser.observe.return_value["actions"] = [
+        {"id": f"e{index}", "node": index, "kind": "click", "role": "button", "label": "L" * 300, "context": "C" * 300,
+         "value": "PRIVATE VALUE", "selector": "PRIVATE SELECTOR"}
+        for index in range(300)
+    ]
+    result = run_task(request(), protocol, chrome_factory=cf, browser_factory=bf)
+    assert result["stop_reason"] == "model_blocked"
+    assert result["available_actions"] == [
+        {"kind": "click", "role": "button", "label": "L" * 200, "context": "C" * 200},
+    ] * 250
+
+
+def test_blocked_control_labels_use_existing_sensitive_value_redaction(monkeypatch):
+    protocol, _, browser, bf, cf = setup_loop(monkeypatch, choices=("e1", "BLOCKED"))
+    loop.field_text.return_value = ("click", {"model": "test", "latency_ms": 1, "usage": {"cost": 0}})
+    initial = page()
+    initial["actions"][0]["sensitive"] = True
+    final = {**page(), "fingerprint": "after-fill", "actions": [
+        {"id": "next", "node": 2, "kind": "click", "role": "button", "label": "Echo click", "context": "Section click"},
+    ]}
+    browser.observe.side_effect = [initial, final]
+    browser.wait_for_change.return_value = final
+    result = run_task(request(), protocol, chrome_factory=cf, browser_factory=bf)
+    assert result["available_actions"] == [
+        {"kind": "click", "role": "button", "label": "Echo [redacted]", "context": "Section [redacted]"},
+    ]
 
 
 def test_protocol_rejects_wrong_approval_id_and_denies_by_default():
@@ -404,6 +500,7 @@ def test_self_test_is_offline_and_accepts_custom_chrome_path(tmp_path):
     assert report["chrome_available"] is False
     assert report["chrome_path"] is None
     assert report["approval_wait_budget"] is True and report["popup_following"] is True
+    assert report["workflow_support"] is True
 
 
 def test_worker_import_does_not_load_harness_or_its_workspace_env():
@@ -485,6 +582,8 @@ def test_persistent_chrome_temp_path_preserves_session_ownership(monkeypatch, tm
         session = session.resolve()
         assert chrome.session_data["profile_dir"] == str(session / "browser-data")
         assert f"--user-data-dir={session / 'browser-data'}" in launch.call_args.args[0]
+        assert not {"--disable-sync", "--disable-background-networking", "--disable-component-update",
+                    "--password-store=basic"}.intersection(launch.call_args.args[0])
         assert launch.call_args.kwargs["cwd"] == session
         assert launch.call_args.kwargs["start_new_session"] is True
         environment = launch.call_args.kwargs["env"]
@@ -514,6 +613,110 @@ def test_verification_handoff_continues_same_browser(monkeypatch):
     assert cf.call_count == 1 and bf.call_count == 1
     assert output.getvalue().count('"type": "human_required"') == 1
     assert '123456' in loop.choose.call_args.args[1]
+
+
+def test_agent_verification_is_bound_to_pending_tab_url_before_code_enters_goal(monkeypatch):
+    monkeypatch.setenv("TINK_BROWSER_SESSION_DIR", "/owned/session")
+    protocol, _, browser, bf, cf = setup_loop(monkeypatch)
+    chrome = cf.return_value
+    chrome.session_data = {"browser_session": "owned", "target_id": "source"}
+    chrome.call.return_value = {"targetInfos": [{"targetId": "source", "type": "page"}]}
+    browser.observe.return_value["authenticationRequired"] = True
+    first = run_task(request(start_url=None, verification_handoff="agent"), protocol,
+                     chrome_factory=cf, browser_factory=bf)
+    assert first["stop_reason"] == "verification_required"
+    assert "available_actions" not in first
+    assert chrome.session_data["pending_verifications"]["source"] == {
+        key: first["verification"][key] for key in ("url", "requested_at")
+    }
+    browser.observe.return_value["url"] = "https://different.example.test/verify"
+    protocol = Protocol(io.StringIO(), io.StringIO())
+    second = run_task(request(start_url=None, tab_id="source", verification_response="fixture-code"), protocol,
+                      chrome_factory=cf, browser_factory=bf)
+    assert second["stop_reason"] == "verification_not_requested"
+    browser.act.assert_not_called()
+    loop.choose.assert_not_called()
+    assert "fixture-code" not in json.dumps(chrome.session_data)
+    assert chrome.session_data["pending_verifications"] == {}
+
+
+def test_matching_verification_is_consumed_once_and_not_stored(monkeypatch):
+    monkeypatch.setenv("TINK_BROWSER_SESSION_DIR", "/owned/session")
+    protocol, _, browser, bf, cf = setup_loop(monkeypatch, choices=("DONE",))
+    chrome = cf.return_value
+    chrome.session_data = {"browser_session": "owned", "target_id": "source",
+                          "pending_verifications": {"source": {"url": page()["url"], "requested_at": 1}}}
+    chrome.call.return_value = {"targetInfos": [{"targetId": "source", "type": "page"}]}
+    browser.observe.return_value["authenticationRequired"] = True
+    result = run_task(request(start_url=None, tab_id="source", verification_response="fixture-code"), protocol,
+                      chrome_factory=cf, browser_factory=bf)
+    assert result["status"] == "completed"
+    assert "fixture-code" in loop.choose.call_args.args[1]
+    assert chrome.session_data["pending_verifications"] == {}
+    assert "fixture-code" not in json.dumps(chrome.session_data)
+    again = run_task(request(start_url=None, tab_id="source", verification_response="fixture-code"), protocol,
+                     chrome_factory=cf, browser_factory=bf)
+    assert again["stop_reason"] == "verification_not_requested"
+    assert loop.choose.call_count == 1
+
+
+@pytest.mark.parametrize("changed_origin", [False, True])
+def test_verification_resume_waits_for_existing_form_to_render(monkeypatch, changed_origin):
+    monkeypatch.setenv("TINK_BROWSER_SESSION_DIR", "/owned/session")
+    protocol, _, browser, bf, cf = setup_loop(monkeypatch, choices=("DONE",))
+    chrome = cf.return_value
+    chrome.session_data = {"browser_session": "owned", "target_id": "source",
+                          "pending_verifications": {"source": {"url": page()["url"], "requested_at": 1}}}
+    chrome.call.return_value = {"targetInfos": [{"targetId": "source", "type": "page"}]}
+    loading = {**page(), "text": "Authentication", "actions": []}
+    ready = {**page(), "authenticationRequired": True}
+    if changed_origin:
+        ready["url"] = "https://different.example.test/verify"
+    browser.observe.side_effect = [loading, loading, ready]
+    result = run_task(request(start_url=None, tab_id="source", verification_response="fixture-code"), protocol,
+                      chrome_factory=cf, browser_factory=bf)
+    assert browser.observe.call_count == 3
+    browser.act.assert_not_called()
+    if changed_origin:
+        assert result["stop_reason"] == "verification_not_requested"
+        loop.choose.assert_not_called()
+    else:
+        assert result["status"] == "completed"
+        assert "fixture-code" in loop.choose.call_args.args[1]
+    assert "fixture-code" not in json.dumps(chrome.session_data)
+
+
+def test_verification_cannot_follow_a_stale_retry_to_another_authentication_page(monkeypatch):
+    monkeypatch.setenv("TINK_BROWSER_SESSION_DIR", "/owned/session")
+    protocol, _, browser, bf, cf = setup_loop(monkeypatch, responses=(True,))
+    chrome = cf.return_value
+    chrome.session_data = {"browser_session": "owned", "target_id": "source",
+                          "pending_verifications": {"source": {"url": page()["url"], "requested_at": 1}}}
+    chrome.call.return_value = {"targetInfos": [{"targetId": "source", "type": "page"}]}
+    first = {**page(), "authenticationRequired": True}
+    redirected = {**first, "url": "https://different.example.test/verify", "fingerprint": "changed"}
+    browser.observe.side_effect = [first, redirected]
+    browser.act.side_effect = StalePage("navigation during approval")
+    result = run_task(request(start_url=None, tab_id="source", verification_response="fixture-code"), protocol,
+                      chrome_factory=cf, browser_factory=bf)
+    assert result["stop_reason"] == "verification_not_requested"
+    assert result["step_count"] == 0
+    assert loop.choose.call_count == 1
+    assert browser.act.call_count == 1  # Rejected before mutation; never retried on the new page.
+
+
+@pytest.mark.parametrize("navigation", [True, False])
+def test_navigation_or_resolved_auth_clears_pending_verification(monkeypatch, navigation):
+    monkeypatch.setenv("TINK_BROWSER_SESSION_DIR", "/owned/session")
+    protocol, _, browser, bf, cf = setup_loop(monkeypatch, choices=("DONE",))
+    chrome = cf.return_value
+    chrome.session_data = {"browser_session": "owned", "target_id": "source",
+                          "pending_verifications": {"source": {"url": page()["url"], "requested_at": 1}}}
+    chrome.call.return_value = {"targetInfos": [{"targetId": "source", "type": "page"}]}
+    result = run_task(request(start_url=page()["url"] if navigation else None), protocol,
+                      chrome_factory=cf, browser_factory=bf)
+    assert result["status"] == "completed"
+    assert chrome.session_data["pending_verifications"] == {}
 
 
 def test_persistent_process_identity_uses_launch_nonce_not_wrapper_path(monkeypatch, tmp_path):

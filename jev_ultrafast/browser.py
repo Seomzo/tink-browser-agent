@@ -52,8 +52,8 @@ class Browser:
         self.call("Emulation.setDeviceMetricsOverride", width=1120, height=780, deviceScaleFactor=1, mobile=False)
         self.call("Emulation.setFocusEmulationEnabled", enabled=True)
 
-    def _follow_new_tab(self):
-        pending, self.pending_tabs = self.pending_tabs, None
+    def _follow_new_tab(self, *, settle=False):
+        pending = self.pending_tabs
         if pending is None:
             return
         opener, previous, deadline = pending
@@ -63,12 +63,14 @@ class Browser:
                           if target["type"] == "page" and target.get("openerId") == opener
                           and target["targetId"] not in previous]
             if len(candidates) > 1:
+                self.pending_tabs = None
                 raise RuntimeError("multiple_new_tabs")
             now = time.monotonic()
             if candidates:
                 first_seen = first_seen if first_seen is not None else now
                 # Give sibling tabs from the same click a short chance to appear before choosing.
                 if now - first_seen >= 0.1 or now >= deadline:
+                    self.pending_tabs = None
                     previous_session = self.session
                     self._attach(candidates[0]["targetId"])
                     self.on_target_changed(self.target)
@@ -78,7 +80,10 @@ class Browser:
             else:
                 first_seen = None
             if now >= deadline:
+                self.pending_tabs = None
                 return
+            if not candidates and not settle:
+                return  # Overlap discovery with model/approval work; keep the pending binding.
             time.sleep(0.02)
 
     def call(self, method, **params):
@@ -152,20 +157,29 @@ class Browser:
             time.sleep(0.05)
         return page
 
-    def fresh(self, page, action=None):
-        if action is not None and action["kind"] in {"click", "select"}:
+    def fresh(self, page, action=None, *, settle_tabs=False):
+        previous_target = self.target
+        self._follow_new_tab(settle=settle_tabs)
+        if self.target != previous_target:
+            return False  # Even a same-URL child requires a new observation/decision.
+        if action is not None and action["kind"] == "back":
+            if back_action(self.call("Page.getNavigationHistory")) != action:
+                return False
+        if action is not None and action["kind"] in {"click", "select", "fill", "key"}:
             node = action["node"]
             if type(node) is not int:
                 return False
+            key_check = (f" && c.keyAllowed(c.nodes.get({node}),{json.dumps(action.get('key'))}) === true"
+                         if action["kind"] == "key" else "")
             current = self.evaluate(
                 "(() => { const c=window.__jevFast; "
-                f"return c ? [c.pageKey(),c.guard(c.nodes.get({node}))] : null; }})()"
+                f"return c{key_check} ? [c.pageKey(),c.guard(c.nodes.get({node}))] : null; }})()"
             )
             return current == [page["page_key"], page["guards"].get(str(node))]
         return self.evaluate(MARKER) == page["marker"]
 
     def act(self, action, page, text=None):
-        if not self.fresh(page, action):
+        if not self.fresh(page, action, settle_tabs=True):
             raise StalePage("Page changed since this decision. Observe again.")
         if action["kind"] == "wait":
             time.sleep(0.1)
@@ -194,6 +208,17 @@ def fingerprint(state):
     return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()
 
 
+def back_action(history):
+    index, entries = history["currentIndex"], history["entries"]
+    if index <= 0 or index >= len(entries):
+        return None
+    previous, current = entries[index - 1], entries[index]
+    return {"id": "back", "kind": "back", "role": "navigation",
+            "label": "Back to " + (previous.get("title") or previous["url"])[:200],
+            "entry_id": previous["id"], "current_entry_id": current["id"],
+            "url": previous["url"], "current_url": current["url"]}
+
+
 def browser_operation(request, *, transport=None):
     operation = request["operation"]
     session = request["session"]
@@ -214,6 +239,23 @@ def browser_operation(request, *, transport=None):
         kind = action["kind"]
         if kind == "scroll":
             call("Input.dispatchMouseEvent", type="mouseWheel", x=550, y=650, deltaX=0, deltaY=action["delta"])
+        elif kind == "back":
+            if back_action(call("Page.getNavigationHistory")) != action:
+                raise StalePage("Navigation history changed. Observe again.")
+            call("Page.navigateToHistoryEntry", entryId=action["entry_id"])
+        elif kind == "key":
+            if action.get("key") not in {"Enter", "Escape"} or type(action.get("node")) is not int:
+                raise ValueError("Invalid observed keyboard action")
+            allowed = evaluate("""(action => {
+              const cache=window.__jevFast;
+              return cache?.keyAllowed(cache.nodes.get(action.node),action.key) === true;
+            })(""" + json.dumps(action) + ")")
+            if allowed is not True:
+                raise StalePage("Keyboard target changed. Observe again.")
+            key = action["key"]
+            params = {"key": key, "code": key, "windowsVirtualKeyCode": 13 if key == "Enter" else 27}
+            call("Input.dispatchKeyEvent", type="keyDown", **params, **({"text": "\r"} if key == "Enter" else {}))
+            call("Input.dispatchKeyEvent", type="keyUp", **params)
         elif kind != "wait":
             if type(action["node"]) is not int:
                 raise ValueError("Invalid observed node")
@@ -222,10 +264,15 @@ def browser_operation(request, *, transport=None):
               const e=window.__jevFast?.nodes.get(action.node);
               if (!e?.isConnected || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]') ||
                   !e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) return null;
+              if (action.role==='img' && !window.__jevFast?.clickableIcon(e)) return null;
+              if (action.open_node!==undefined || action.open_display!==undefined) {
+                const opening=window.__jevFast?.comboboxOpen(e);
+                return action.kind==='click' && opening && opening.container===action.open_node &&
+                  opening.display===action.open_display ? opening.point : null;
+              }
               if (action.kind==='fill' && (e.readOnly || e.getAttribute('aria-readonly')==='true')) return null;
-              const r=e.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2;
-              if (!r.width || !r.height || x<0 || y<0 || x>=innerWidth || y>=innerHeight) return null;
-              if (!e.contains(document.elementFromPoint(x,y))) return null;
+              const point=window.__jevFast?.hitPoint(e);
+              if (!point) return null;
               if (action.kind==='select') {
                 if (e.tagName!=='SELECT' || ![...e.options].some(o=>o.value===action.value &&
                     !o.disabled && !o.closest('optgroup[disabled]'))) return null;
@@ -233,7 +280,7 @@ def browser_operation(request, *, transport=None):
                 e.dispatchEvent(new Event('input',{bubbles:true}));
                 e.dispatchEvent(new Event('change',{bubbles:true}));
               }
-              return {x,y};
+              return point;
             })(""" + json.dumps(action) + ")")
             if target is None:
                 if kind == "select":
@@ -265,6 +312,9 @@ def browser_operation(request, *, transport=None):
     info = evaluate(READ_STATE)
     if info is None:
         raise StalePage("Document is navigating")
+    previous = back_action(call("Page.getNavigationHistory"))
+    if previous is not None:
+        info["actions"].append(previous)
     info["fingerprint"] = fingerprint(info)
     if request.get("screenshot", True):
         info["screenshot"] = call("Page.captureScreenshot", format="jpeg", quality=72)["data"]

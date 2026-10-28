@@ -48,17 +48,19 @@ def validate_choice(answer, ids):
 def action_space(actions):
     """One index per observed element; each operation has its own valid target choices."""
     elements, indices, targets, controls = [], {}, {}, {}
-    operations = {"click": "CLICK", "fill": "TYPE_TEXT", "select": "SELECT"}
+    operations = {"click": "CLICK", "fill": "TYPE_TEXT", "select": "SELECT", "key": "CLICK", "back": "CLICK"}
     for action in actions:
         kind = action["kind"]
         if kind not in operations:
             controls[action["id"].upper()] = action
             continue
-        node = action["node"]
+        # Keyboard/navigation choices must not replace a field's ordinary click.
+        node = (kind, action["id"]) if kind in {"key", "back"} else action["node"]
         if node not in indices:
             index = str(len(elements) + 1)
             indices[node] = index
-            element = {k: action[k] for k in ("role", "value", "checked", "selected", "expanded") if k in action}
+            element = {k: action[k] for k in ("role", "value", "checked", "selected", "expanded", "context", "href")
+                       if k in action}
             element.update(index=index, label=action["label"].split(" → ")[0], operations=[])
             if kind == "select":
                 element["value"] = action.get("current_value", "")
@@ -81,7 +83,7 @@ def action_space(actions):
 def choose(state, goal, history, *, decision_model=None):
     elements, targets, controls = action_space(state["actions"])
     labels = {
-        "CLICK": "Click an element, button, menu option, autocomplete suggestion, or calendar day.",
+        "CLICK": "Choose an observed click, keyboard, or Back action.",
         "TYPE_TEXT": "Enter or replace text in an editable field. A small LLM will supply the value from the goal.",
         "SELECT": "Select an observed dropdown value.",
     }
@@ -98,7 +100,7 @@ def choose(state, goal, history, *, decision_model=None):
                 index: {
                     "element": f"[{index}] {a['label']}",
                     "current_value": a.get("current_value", a.get("value", "")),
-                    **{k: a[k] for k in ("role", "checked", "selected", "expanded") if k in a},
+                    **{k: a[k] for k in ("role", "checked", "selected", "expanded", "context", "href") if k in a},
                 }
                 for index, a in candidates.items()
             },
@@ -159,7 +161,7 @@ def choose(state, goal, history, *, decision_model=None):
 def field_context(goal, action, page, history):
     return {
         "goal": goal,
-        "field": {k: action.get(k) for k in ("label", "role", "value")},
+        "field": {k: action.get(k) for k in ("label", "role", "value", "context")},
         "page": {"title": page["title"], "text": page["text"][:6000]},
         "recent_actions": [{k: h.get(k) for k in ("action", "text")} for h in history[-6:]],
     }
